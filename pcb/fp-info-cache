@@ -1,4 +1,4 @@
-22699992138457075
+22708796494976060
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -85841,6 +85841,13 @@ SB0603WC01-RG
 4
 4
 SamacSys_Parts
+SLW8645872ARAND
+SLW-864587-2A-RA-N-D-2
+Switch
+0
+5
+5
+SamacSys_Parts
 SOD3716X135N
 sod-123-ren1
 Diode
@@ -85863,8 +85870,36 @@ Integrated Circuit
 9
 SamacSys_Parts
 SOT65P210X110-5N
-74AHC1G08SE-7
+74AHCT1G32SE-7
 Undefined or Miscellaneous
+0
+5
+5
+SamacSys_Parts
+SOT95P270X145-5N
+(OT) [SOT-23]
+Integrated Circuit
+0
+5
+5
+SamacSys_Parts
+SOT96P240X110-3N
+SOT23_
+Integrated Circuit
+0
+3
+3
+SamacSys_Parts
+SSU121BRT
+SSU-121BRT-2
+Switch
+0
+5
+5
+SamacSys_Parts
+TC75S57FUTE85LF
+SSOP5-P-0.65A_2021
+Integrated Circuit
 0
 5
 5
