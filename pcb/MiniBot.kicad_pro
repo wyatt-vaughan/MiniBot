@@ -503,16 +503,12 @@
       ""
     ],
     [
-      "c3ff127c-1c50-4eb6-bcc5-3ec224c16d80",
-      "Ultrasonic Amplifier"
+      "30439bae-73bd-4041-a14b-0bcf2e025602",
+      "MotorDriver1"
     ],
     [
       "5bde5315-a331-4fb7-9bbc-33e1b550bab8",
       "MotorDriver0"
-    ],
-    [
-      "9b095436-6f94-43fd-8ee1-ad6fe1b11e57",
-      "MotorDriver1"
     ]
   ],
   "text_variables": {}
