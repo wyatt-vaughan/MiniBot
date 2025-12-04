@@ -565,7 +565,7 @@
   (symbol (lib_id "power:GND") (at 86.36 111.76 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 16768c6a-49fe-446b-a3d0-32fc05985c84)
-    (property "Reference" "#PWR046" (at 86.36 118.11 0)
+    (property "Reference" "#PWR053" (at 86.36 118.11 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 86.36 116.84 0)
@@ -581,10 +581,39 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR046") (unit 1)
+          (reference "#PWR053") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR054") (unit 1)
+          (reference "#PWR064") (unit 1)
+        )
+      )
+    )
+  )
+
+  (symbol (lib_id "Device:R") (at 118.11 119.38 0) (unit 1)
+    (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
+    (uuid 16fbfe1e-5a6b-414b-8630-3eab832d1e9a)
+    (property "Reference" "R24" (at 120.65 118.11 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Value" "47k" (at 120.65 120.65 0)
+      (effects (font (size 1.27 1.27)) (justify left))
+    )
+    (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 116.332 119.38 90)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (property "Datasheet" "~" (at 118.11 119.38 0)
+      (effects (font (size 1.27 1.27)) hide)
+    )
+    (pin "1" (uuid 611cc770-561d-4eaf-9c20-b0d7d936478d))
+    (pin "2" (uuid 78860fd3-0f73-4caa-be84-39276554d71f))
+    (instances
+      (project "MiniBot"
+        (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
+          (reference "R24") (unit 1)
+        )
+        (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
+          (reference "R25") (unit 1)
         )
       )
     )
@@ -593,7 +622,7 @@
   (symbol (lib_id "Device:C") (at 107.95 124.46 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 20fd2ab9-feea-47cc-9896-1649ca295d0b)
-    (property "Reference" "C20" (at 111.76 123.19 0)
+    (property "Reference" "C18" (at 111.76 123.19 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "22nF" (at 111.76 125.73 0)
@@ -610,10 +639,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "C20") (unit 1)
+          (reference "C18") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "C21") (unit 1)
+          (reference "C22") (unit 1)
         )
       )
     )
@@ -622,7 +651,7 @@
   (symbol (lib_id "Device:R") (at 167.64 92.71 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 4797dda2-092a-4f06-9b0d-0aec7cf31dbe)
-    (property "Reference" "R15" (at 170.18 91.44 0)
+    (property "Reference" "R23" (at 170.18 91.44 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "1" (at 170.18 93.98 0)
@@ -642,10 +671,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "R15") (unit 1)
+          (reference "R23") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "R13") (unit 1)
+          (reference "R19") (unit 1)
         )
       )
     )
@@ -654,7 +683,7 @@
   (symbol (lib_id "power:+3V3") (at 106.68 87.63 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 5d677227-1554-4117-a54d-5c62e5134227)
-    (property "Reference" "#PWR062" (at 106.68 91.44 0)
+    (property "Reference" "#PWR057" (at 106.68 91.44 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "+3V3" (at 106.68 82.55 0)
@@ -670,10 +699,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR062") (unit 1)
+          (reference "#PWR057") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR063") (unit 1)
+          (reference "#PWR068") (unit 1)
         )
       )
     )
@@ -682,7 +711,7 @@
   (symbol (lib_id "power:VDC") (at 88.9 72.39 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 5fce8e46-8693-4e51-b991-c620105ed0e8)
-    (property "Reference" "#PWR052" (at 88.9 74.93 0)
+    (property "Reference" "#PWR065" (at 88.9 74.93 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "VDC" (at 88.9 67.31 0)
@@ -698,10 +727,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR052") (unit 1)
+          (reference "#PWR065") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR044") (unit 1)
+          (reference "#PWR054") (unit 1)
         )
       )
     )
@@ -710,7 +739,7 @@
   (symbol (lib_id "power:GND") (at 88.9 87.63 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 63fa05bd-5eab-4d83-9317-4c62a6acffcf)
-    (property "Reference" "#PWR053" (at 88.9 93.98 0)
+    (property "Reference" "#PWR066" (at 88.9 93.98 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 88.9 92.71 0)
@@ -726,10 +755,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR053") (unit 1)
+          (reference "#PWR066") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR045") (unit 1)
+          (reference "#PWR055") (unit 1)
         )
       )
     )
@@ -738,7 +767,7 @@
   (symbol (lib_id "Device:R") (at 162.56 106.68 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 64f84c5a-d837-4692-a12a-9fdaa368a453)
-    (property "Reference" "R14" (at 165.1 105.41 0)
+    (property "Reference" "R22" (at 165.1 105.41 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "1" (at 165.1 107.95 0)
@@ -758,10 +787,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "R14") (unit 1)
+          (reference "R22") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "R12") (unit 1)
+          (reference "R18") (unit 1)
         )
       )
     )
@@ -770,7 +799,7 @@
   (symbol (lib_id "Device:C") (at 86.36 104.14 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 73b0bc04-e456-4718-a237-25ae5fec6c30)
-    (property "Reference" "C18" (at 90.17 102.87 0)
+    (property "Reference" "C16" (at 90.17 102.87 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "0.1uF" (at 90.17 105.41 0)
@@ -787,10 +816,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "C18") (unit 1)
+          (reference "C16") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "C19") (unit 1)
+          (reference "C20") (unit 1)
         )
       )
     )
@@ -799,7 +828,7 @@
   (symbol (lib_id "power:GND") (at 114.3 132.08 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 7f6561ad-2bd9-4fe0-8d75-1f0a9989ce32)
-    (property "Reference" "#PWR066" (at 114.3 138.43 0)
+    (property "Reference" "#PWR058" (at 114.3 138.43 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 114.3 137.16 0)
@@ -815,10 +844,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR066") (unit 1)
+          (reference "#PWR058") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR067") (unit 1)
+          (reference "#PWR069") (unit 1)
         )
       )
     )
@@ -827,7 +856,7 @@
   (symbol (lib_id "Device:C") (at 88.9 80.01 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 8255e906-c7c4-4836-b657-25d37dd03aa4)
-    (property "Reference" "C16" (at 92.71 78.74 0)
+    (property "Reference" "C21" (at 92.71 78.74 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "10uF" (at 92.71 81.28 0)
@@ -844,10 +873,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "C16") (unit 1)
+          (reference "C21") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "C14") (unit 1)
+          (reference "C17") (unit 1)
         )
       )
     )
@@ -856,7 +885,7 @@
   (symbol (lib_id "power:VDC") (at 133.35 74.93 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 8f0f4011-ccd7-49b0-8cb7-abcc94c4284d)
-    (property "Reference" "#PWR056" (at 133.35 77.47 0)
+    (property "Reference" "#PWR070" (at 133.35 77.47 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "VDC" (at 133.35 69.85 0)
@@ -872,10 +901,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR056") (unit 1)
+          (reference "#PWR070") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR048") (unit 1)
+          (reference "#PWR059") (unit 1)
         )
       )
     )
@@ -884,7 +913,7 @@
   (symbol (lib_id "power:GND") (at 167.64 97.79 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 92694250-cd28-4c89-aaef-5da2f65a170c)
-    (property "Reference" "#PWR059" (at 167.64 104.14 0)
+    (property "Reference" "#PWR073" (at 167.64 104.14 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 167.64 102.87 0)
@@ -900,10 +929,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR059") (unit 1)
+          (reference "#PWR073") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR051") (unit 1)
+          (reference "#PWR062") (unit 1)
         )
       )
     )
@@ -912,7 +941,7 @@
   (symbol (lib_id "Device:C") (at 68.58 101.6 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 936d3b49-ca95-4ce6-a5a9-1072ae95dd26)
-    (property "Reference" "C17" (at 72.39 100.33 0)
+    (property "Reference" "C19" (at 72.39 100.33 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "0.1uF" (at 72.39 102.87 0)
@@ -929,7 +958,7 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "C17") (unit 1)
+          (reference "C19") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
           (reference "C15") (unit 1)
@@ -941,7 +970,7 @@
   (symbol (lib_id "power:GND") (at 102.87 91.44 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 9660464e-cae8-48d2-85c5-c4fb3dfdcab2)
-    (property "Reference" "#PWR064" (at 102.87 97.79 0)
+    (property "Reference" "#PWR056" (at 102.87 97.79 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 102.87 96.52 0)
@@ -957,10 +986,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR064") (unit 1)
+          (reference "#PWR056") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR065") (unit 1)
+          (reference "#PWR067") (unit 1)
         )
       )
     )
@@ -969,7 +998,7 @@
   (symbol (lib_id "power:GND") (at 162.56 111.76 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid 985fc6c8-449e-471e-b89e-5703614d8780)
-    (property "Reference" "#PWR058" (at 162.56 118.11 0)
+    (property "Reference" "#PWR072" (at 162.56 118.11 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 162.56 116.84 0)
@@ -985,10 +1014,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR058") (unit 1)
+          (reference "#PWR072") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR050") (unit 1)
+          (reference "#PWR061") (unit 1)
         )
       )
     )
@@ -997,7 +1026,7 @@
   (symbol (lib_id "power:GND") (at 68.58 109.22 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid d02e1d8b-3e54-4882-8acb-79611512dbf4)
-    (property "Reference" "#PWR055" (at 68.58 115.57 0)
+    (property "Reference" "#PWR063" (at 68.58 115.57 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 68.58 114.3 0)
@@ -1013,10 +1042,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR055") (unit 1)
+          (reference "#PWR063") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR047") (unit 1)
+          (reference "#PWR052") (unit 1)
         )
       )
     )
@@ -1025,7 +1054,7 @@
   (symbol (lib_id "power:GND") (at 134.62 115.57 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid d29ded8a-d1a7-4d94-9b86-7a957052bed2)
-    (property "Reference" "#PWR057" (at 134.62 121.92 0)
+    (property "Reference" "#PWR071" (at 134.62 121.92 0)
       (effects (font (size 1.27 1.27)) hide)
     )
     (property "Value" "GND" (at 134.62 120.65 0)
@@ -1041,39 +1070,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "#PWR057") (unit 1)
+          (reference "#PWR071") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "#PWR049") (unit 1)
-        )
-      )
-    )
-  )
-
-  (symbol (lib_id "Device:R") (at 118.11 119.38 0) (unit 1)
-    (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
-    (uuid d3a0425f-5198-45c2-a44b-83998cc4df15)
-    (property "Reference" "R20" (at 120.65 118.11 0)
-      (effects (font (size 1.27 1.27)) (justify left))
-    )
-    (property "Value" "47k" (at 120.65 120.65 0)
-      (effects (font (size 1.27 1.27)) (justify left))
-    )
-    (property "Footprint" "Resistor_SMD:R_0402_1005Metric" (at 116.332 119.38 90)
-      (effects (font (size 1.27 1.27)) hide)
-    )
-    (property "Datasheet" "~" (at 118.11 119.38 0)
-      (effects (font (size 1.27 1.27)) hide)
-    )
-    (pin "1" (uuid 48ab1b9b-1a5b-4362-8f6e-5e509fd746c6))
-    (pin "2" (uuid 50579d00-8f1a-4135-a858-23f1648f69e8))
-    (instances
-      (project "MiniBot"
-        (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "R20") (unit 1)
-        )
-        (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "R21") (unit 1)
+          (reference "#PWR060") (unit 1)
         )
       )
     )
@@ -1126,7 +1126,7 @@
   (symbol (lib_id "Device:R") (at 107.95 115.57 0) (unit 1)
     (in_bom yes) (on_board yes) (dnp no) (fields_autoplaced)
     (uuid e0d6a1cf-c8bd-4997-9cbf-aa788b38f73d)
-    (property "Reference" "R22" (at 110.49 114.3 0)
+    (property "Reference" "R16" (at 110.49 114.3 0)
       (effects (font (size 1.27 1.27)) (justify left))
     )
     (property "Value" "1k" (at 110.49 116.84 0)
@@ -1143,10 +1143,10 @@
     (instances
       (project "MiniBot"
         (path "/0e598331-3211-4e8a-a305-31a83585854d/30439bae-73bd-4041-a14b-0bcf2e025602"
-          (reference "R22") (unit 1)
+          (reference "R16") (unit 1)
         )
         (path "/0e598331-3211-4e8a-a305-31a83585854d/5bde5315-a331-4fb7-9bbc-33e1b550bab8"
-          (reference "R23") (unit 1)
+          (reference "R20") (unit 1)
         )
       )
     )
