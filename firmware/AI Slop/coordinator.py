@@ -1,924 +1,983 @@
-import math
+"""
+Chess Robot Coordinator and Master Controller
+Manages piece communication, movement planning, and game rule enforcement
+"""
+
+import pygame
+import numpy as np
 import random
 import time
-import tkinter as tk
+from dataclasses import dataclass, field
+from typing import List, Tuple, Optional, Dict
+from enum import Enum
 from abc import ABC, abstractmethod
-from typing import List, Dict, Tuple, Optional
-import threading
+import math
 
-# --- Constants ---
-BOARD_SIZE = 440
-SIDE_ZONE = 100
-TOTAL_X_MIN = -SIDE_ZONE
-TOTAL_X_MAX = BOARD_SIZE + SIDE_ZONE
-TOTAL_Y_MIN = 0
-TOTAL_Y_MAX = BOARD_SIZE
-PIECE_RADIUS = 15
-SAFETY_RADIUS = 20
-MOVE_SPEED = 200
-ROTATE_SPEED = 1.2
-ROTATE_MAX_ERROR = 0.05
-UPDATE_INTERVAL = 0.05  # 20 FPS for smoother UI responsiveness
+# ============================================================================
+# Constants
+# ============================================================================
 
-# --- Placeholder ESP-NOW send ---
-def send_espnow_command(cmd, piece_id, *args):
-    """Send command to piece via ESP-NOW. Only used in real mode."""
-    print(f"[ESPNow] {cmd} -> piece_{piece_id} {args}")
+BOARD_SQUARE_SIZE = 55  # mm
+BOARD_EXTRA_SIDE = 100  # mm on each side
+PIECE_RADIUS = 15  # 30mm OD = 15mm radius
 
-# --- Data classes ---
+# Chess pieces: 8 pawns per side (row 1 & 6) + 8 major pieces per side (row 0 & 7)
+# White pieces (bottom): pawns a2-h2, back row a1-h1
+# Black pieces (top): pawns a7-h7, back row a8-h8
+# Format: piece_id: (column, row)
+PIECE_START_POSITIONS = {
+    # White pawns (row 1)
+    'p1': (0, 1), 'p2': (1, 1), 'p3': (2, 1), 'p4': (3, 1),
+    'p5': (4, 1), 'p6': (5, 1), 'p7': (6, 1), 'p8': (7, 1),
+    # White major pieces (row 0) - a1-h1
+    'R1': (0, 0), 'N1': (1, 0), 'B1': (2, 0), 'Q': (3, 0),
+    'K': (4, 0), 'B2': (5, 0), 'N2': (6, 0), 'R2': (7, 0),
+    # Black pawns (row 6)
+    'P1': (0, 6), 'P2': (1, 6), 'P3': (2, 6), 'P4': (3, 6),
+    'P5': (4, 6), 'P6': (5, 6), 'P7': (6, 6), 'P8': (7, 6),
+    # Black major pieces (row 7) - a8-h8
+    'r1': (0, 7), 'n1': (1, 7), 'b1': (2, 7), 'q': (3, 7),
+    'k': (4, 7), 'b2': (5, 7), 'n2': (6, 7), 'r2': (7, 7),
+}
+
+# UI dimensions
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 900
+BOARD_DISPLAY_OFFSET_X = 50
+BOARD_DISPLAY_OFFSET_Y = 50
+BOARD_DISPLAY_SQUARE_SIZE = 70  # pixels for display
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def board_coords_to_world(col: int, row: int) -> Tuple[float, float]:
+    """
+    Convert chess board coordinates (column, row) to world coordinates (x, y) in mm.
+    Centers the position within the square.
+    
+    Args:
+        col: Column 0-7
+        row: Row 0-7
+        
+    Returns:
+        Tuple of (x, y) in millimeters, centered on the square
+    """
+    # Center of square
+    x = BOARD_EXTRA_SIDE + col * BOARD_SQUARE_SIZE + BOARD_SQUARE_SIZE / 2
+    y = row * BOARD_SQUARE_SIZE + BOARD_SQUARE_SIZE / 2
+    return (x, y)
+
+# ============================================================================
+# Enums and Data Classes
+# ============================================================================
+
+class MoveType(Enum):
+    ROTATE = "rotate"
+    STRAIGHT = "straight"
+    ARC = "arc"
+
+@dataclass
+class Position:
+    """Position in 2D space (mm)"""
+    x: float
+    y: float
+    orientation: float = 0.0  # degrees, 0 = facing right
+    
+    def distance_to(self, other: 'Position') -> float:
+        """Distance in mm"""
+        return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
+    
+    def copy(self) -> 'Position':
+        return Position(self.x, self.y, self.orientation)
+
+@dataclass
 class Piece:
-    """Represents a chess piece with ID, type, and color."""
-    _next_index = 0
+    """A chess piece on the board"""
+    id: str
+    position: Position
+    start_position: Optional[Position] = None
+    
+    def distance_to(self, other: 'Piece') -> float:
+        return self.position.distance_to(other.position)
 
-    def __init__(self, name: str, color: str):
-        self.name = name
-        self.color = color
-        self.index = Piece._next_index
-        Piece._next_index += 1
+@dataclass
+class MoveCommand:
+    """A movement command for a piece"""
+    piece_id: str
+    move_type: MoveType
+    parameters: Dict  # Type-specific params (angle, distance, arc_radius, etc)
+    
+@dataclass
+class MovePath:
+    """A planned movement path for a piece"""
+    piece_id: str
+    waypoints: List[Position] = field(default_factory=list)
+    duration: float = 0.0  # estimated time in seconds
 
-    @staticmethod
-    def reset_index():
-        """Reset the global piece index counter."""
-        Piece._next_index = 0
+@dataclass
+class SimulatorState:
+    """State of the simulator"""
+    pieces: Dict[str, Piece]
+    paths: Dict[str, MovePath] = field(default_factory=dict)
+    executing: bool = False
+    current_piece_executing: Optional[str] = None
+    execution_start_time: float = 0.0
 
+# ============================================================================
+# Path Planning Interface
+# ============================================================================
 
-class PieceState:
-    """Runtime state of a piece (position, angle, goals)."""
-
-    def __init__(self, piece: Piece, position: Tuple[float, float] = (0, 0), angle: float = 0.0):
-        self.piece = piece
-        self.position = position
-        self.angle = angle
-        self.at_target = False
-        self.reverse_mode = False
-
-
-class Motion:
-    """A single motion command for a piece."""
-
-    def __init__(self, kind: str, params: Tuple, duration: float):
-        self.kind = kind  # "rotate", "line", "arc"
-        self.params = params
-        self.duration = duration
-
-
-class MotionPlan:
-    """Complete plan for moving a piece to a target."""
-
-    def __init__(self, piece: Piece, motions: List[Motion], target_pos: Tuple[float, float]):
-        self.piece = piece
-        self.motions = motions
-        self.target_pos = target_pos
-        self.total_time = sum(m.duration for m in motions)
-
-
-# --- Motion Planner Interface ---
-class MotionPlanner(ABC):
-    """Abstract base class for motion planning strategies."""
-
+class PathPlanner(ABC):
+    """Abstract base class for path planning algorithms"""
+    
     @abstractmethod
-    def plan_moves(
-        self, piece_states: Dict[Piece, PieceState], targets: Dict[Piece, Tuple[float, float]]
-    ) -> Dict[Piece, MotionPlan]:
+    def plan_movements(self, pieces: Dict[str, Piece], 
+                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
         """
-        Generate motion plans for all pieces.
-
+        Plan movements for all pieces to reach target positions
+        
         Args:
-            piece_states: Current state of each piece
-            targets: Target positions for each piece
-
+            pieces: Current pieces with their positions
+            target_positions: Target positions for each piece
+            
         Returns:
-            Dictionary mapping pieces to their motion plans
+            Dictionary mapping piece_id to MovePath
         """
         pass
+    
+    @abstractmethod
+    def get_name(self) -> str:
+        """Get the name of this planner"""
+        pass
 
-
-class BasicMotionPlanner(MotionPlanner):
-    """
-    Basic motion planner with collision avoidance.
-    Moves each piece to its target using straight lines and detours.
-    """
-
-    def __init__(self, board: "ChessBoard"):
-        self.board = board
-        self.piece_order = []  # Store the order pieces are planned
-
-    def plan_moves(
-        self, piece_states: Dict[Piece, PieceState], targets: Dict[Piece, Tuple[float, float]]
-    ) -> Dict[Piece, MotionPlan]:
-        """Generate motion plans for all pieces to reach their targets."""
-        plans = {}
-        for piece, state in piece_states.items():
-            target = targets[piece]
-            motions = self._plan_piece_path(state, target)
-            plans[piece] = MotionPlan(piece, motions, target)
-        return plans
-
-    def _plan_piece_path(self, state: PieceState, target: Tuple[float, float]) -> List[Motion]:
-        """Plan motion sequence for a single piece."""
-        motions = []
-        current_pos = state.position
-        current_angle = state.angle
-        max_attempts = 5
-
-        for attempt in range(max_attempts):
-            dx, dy = target[0] - current_pos[0], target[1] - current_pos[1]
-            dist = math.hypot(dx, dy)
-            if dist < 1e-3:
-                break
-
-            # Determine target angle
-            target_angle = math.atan2(dy, dx)
-            diff = (target_angle - current_angle + math.pi) % (2 * math.pi) - math.pi
-            reverse = abs(diff) > math.pi / 2
-            if reverse:
-                target_angle = (target_angle + math.pi) % (2 * math.pi)
-                diff = (target_angle - current_angle + math.pi) % (2 * math.pi) - math.pi
-
-            # Add rotation
-            rotate_time = abs(diff) / ROTATE_SPEED
-            motions.append(Motion("rotate", (diff,), rotate_time))
-            current_angle = target_angle
-
-            # Try straight path
-            if self._try_path_clear(current_pos, current_angle, dist, state.piece, reverse):
-                line_time = dist / MOVE_SPEED
-                motions.append(Motion("line", (dist,), line_time))
-                current_pos = target
-                break
-            else:
-                # Try detour
-                detour_success, detour_time, new_pos, new_angle = self._simulate_detour(
-                    state.piece, current_pos, current_angle
-                )
-                if detour_success:
-                    motions.append(Motion("arc", (SAFETY_RADIUS * 3, math.pi / 3), detour_time))
-                    current_pos, current_angle = new_pos, new_angle
-                else:
-                    # Try to move blockers
-                    blockers = self._detect_nearby_blockers(current_pos, state.piece)
-                    if not any(self._simulate_move_blocker(b, state.piece) for b in blockers):
-                        break
-
-        return motions
-
-    def _try_path_clear(self, pos: Tuple[float, float], angle: float, distance: float, piece: Piece, reverse: bool = False) -> bool:
-        """Check if a straight path is clear."""
-        dx, dy = math.cos(angle), math.sin(angle)
-        if reverse:
-            distance *= -1
-        steps = max(1, int(abs(distance) / SAFETY_RADIUS))
-        for i in range(steps + 1):
-            check_pos = (pos[0] + dx * distance * i / steps, pos[1] + dy * distance * i / steps)
-            if self.board.is_collision(check_pos, piece):
-                return False
-        return True
-
-    def _simulate_detour(self, piece: Piece, pos: Tuple[float, float], angle: float) -> Tuple[bool, float, Tuple[float, float], float]:
-        """Try to find a detour path around obstacles."""
-        for side in [+1, -1]:
-            r, arc_angle, steps = SAFETY_RADIUS * 3, side * math.pi / 3, 10
-            valid = True
-            for i in range(steps + 1):
-                ang = angle + arc_angle * i / steps
-                x = pos[0] - math.sin(angle) * r + math.sin(ang) * r
-                y = pos[1] + math.cos(angle) * r - math.cos(ang) * r
-                if self.board.is_collision((x, y), piece):
-                    valid = False
-                    break
-            if valid:
-                arc_len = r * abs(arc_angle)
-                arc_time = arc_len / MOVE_SPEED
-                new_pos = (
-                    pos[0] - math.sin(angle) * r + math.sin(angle + arc_angle) * r,
-                    pos[1] + math.cos(angle) * r - math.cos(angle + arc_angle) * r,
-                )
-                new_ang = angle + arc_angle
-                return True, arc_time, new_pos, new_ang
-        return False, 0.0, pos, angle
-
-    def _detect_nearby_blockers(self, pos: Tuple[float, float], piece: Piece) -> List[Piece]:
-        """Find pieces that are blocking the current piece."""
-        return [p for p in self.board.pieces if p != piece and self.board.distance(pos, self.board.piece_states[p].position) < 2 * SAFETY_RADIUS]
-
-    def _simulate_move_blocker(self, blocker: Piece, mover: Piece) -> bool:
-        """Attempt to move a blocking piece out of the way."""
-        blocker_state = self.board.piece_states[blocker]
-        mover_state = self.board.piece_states[mover]
-        angle = math.atan2(blocker_state.position[1] - mover_state.position[1], blocker_state.position[0] - mover_state.position[0])
-        for side in [+1, -1]:
-            offset = angle + side * math.pi / 2
-            new_pos = (
-                blocker_state.position[0] + math.cos(offset) * SAFETY_RADIUS * 2,
-                blocker_state.position[1] + math.sin(offset) * SAFETY_RADIUS * 2,
+class SequentialPathPlanner(PathPlanner):
+    """Simple sequential planner with differential drive physics"""
+    
+    def plan_movements(self, pieces: Dict[str, Piece],
+                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
+        """
+        Plan movements using differential drive physics.
+        Pieces can only move forward/backward in the direction they're facing.
+        """
+        paths = {}
+        
+        for piece_id, target_pos in target_positions.items():
+            if piece_id not in pieces:
+                continue
+                
+            piece = pieces[piece_id]
+            
+            # Create path: rotate to face target, then move forward
+            waypoints = [piece.position.copy()]
+            
+            # Calculate angle to target
+            dx = target_pos.x - piece.position.x
+            dy = target_pos.y - piece.position.y
+            target_angle = math.degrees(math.atan2(dy, dx))
+            
+            # Normalize angle to 0-360
+            target_angle = target_angle % 360
+            current_angle = piece.position.orientation % 360
+            
+            # Calculate shortest rotation direction
+            angle_diff = (target_angle - current_angle) % 360
+            if angle_diff > 180:
+                angle_diff -= 360
+            
+            # Step 1: Rotate to face target (no position change, only orientation)
+            waypoints.append(Position(piece.position.x, piece.position.y, target_angle))
+            
+            # Step 2: Move forward (direction = orientation, no spinning)
+            waypoints.append(Position(target_pos.x, target_pos.y, target_angle))
+            
+            # Estimate duration
+            rotation_time = abs(angle_diff) / 180.0  # seconds for rotation
+            movement_distance = piece.position.distance_to(target_pos)
+            movement_time = movement_distance / 100  # 100mm/s forward speed
+            
+            paths[piece_id] = MovePath(
+                piece_id=piece_id,
+                waypoints=waypoints,
+                duration=rotation_time + movement_time
             )
-            if not self.board.is_collision(new_pos, blocker):
-                return True
-        return False
+        
+        return paths
+    
+    def get_name(self) -> str:
+        return "Sequential Planner"
 
-
-class IntelligentMotionPlanner(MotionPlanner):
+class CollisionAwarePathPlanner(PathPlanner):
     """
-    Advanced motion planner with strategic piece ordering and collision resolution.
+    Advanced planner with differential drive physics and collision avoidance.
     
     Strategy:
-    1. Move back rank pieces first (sorted by move distance)
-    2. Move pawns to the side to clear center paths
-    3. Use curved paths around obstacles
-    4. Try different collision resolution strategies
-    5. Optimize move order for speed
+    1. Sort pieces by distance to target (closer = higher priority)
+    2. For each piece, check if direct path is clear
+    3. If collision detected:
+       a. Try to move other pieces out of the way first
+       b. Try perpendicular detour paths
+       c. Move to staging area and retry later
     """
-
-    def __init__(self, board: "ChessBoard"):
-        self.board = board
-        self.piece_order = []
-        self.best_plan = None
-        self.best_time = float('inf')
-
-    def plan_moves(
-        self, piece_states: Dict[Piece, PieceState], targets: Dict[Piece, Tuple[float, float]]
-    ) -> Dict[Piece, MotionPlan]:
-        """Generate optimized motion plans using intelligent ordering and strategies."""
-        # Calculate strategic piece order
-        piece_order = self._calculate_piece_order(piece_states, targets)
+    
+    COLLISION_DISTANCE = PIECE_RADIUS * 2 + 5  # mm, with buffer
+    
+    def plan_movements(self, pieces: Dict[str, Piece],
+                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
+        """Plan movements with collision avoidance using differential drive physics"""
+        paths = {}
         
-        # Try multiple ordering strategies and collision resolution approaches
-        strategies = [
-            (piece_order, "straight"),  # Original order, prefer straight paths
-            (piece_order, "curve"),     # Original order, prefer curved detouring
-            (piece_order, "combined"),  # Original order, try all strategies
-        ]
+        # Occupied positions: where pieces currently are and will end up
+        occupied_positions = {pid: p.position for pid, p in pieces.items()}
         
-        # Try slight randomization of order for optimization
-        for _ in range(2):
-            randomized = piece_order.copy()
-            random.shuffle(randomized)
-            strategies.append((randomized, "combined"))
+        # Sort by distance to target (closest first = highest priority)
+        sorted_pieces = sorted(
+            target_positions.items(),
+            key=lambda x: pieces[x[0]].position.distance_to(x[1])
+        )
         
-        best_plans = None
-        best_time = float('inf')
-        
-        # Evaluate each strategy
-        for order, strategy in strategies:
-            plans = self._plan_with_strategy(order, piece_states, targets, strategy)
-            total_time = sum(plan.total_time for plan in plans.values())
+        for piece_id, target_pos in sorted_pieces:
+            if piece_id not in pieces:
+                continue
             
-            if total_time < best_time:
-                best_time = total_time
-                best_plans = plans
-                print(f"[PLANNER] Found better plan with strategy '{strategy}': {total_time:.2f}s")
-        
-        return best_plans
-
-    def _calculate_piece_order(self, piece_states: Dict[Piece, PieceState], targets: Dict[Piece, Tuple[float, float]]) -> List[Piece]:
-        """Calculate optimal piece planning order."""
-        # Separate pieces by type
-        back_rank = []
-        pawns = []
-        
-        for piece in self.board.pieces:
-            if piece.name == 'P':
-                pawns.append(piece)
-            else:
-                back_rank.append(piece)
-        
-        # Sort back rank by move distance (shortest first)
-        back_rank_with_dist = [
-            (piece, self.board.distance(piece_states[piece].position, targets[piece]))
-            for piece in back_rank
-        ]
-        back_rank_with_dist.sort(key=lambda x: x[1])
-        back_rank_sorted = [p[0] for p in back_rank_with_dist]
-        
-        # Sort pawns by distance to side (moving them to edges first)
-        pawns_with_dist = [
-            (piece, min(piece_states[piece].position[0], BOARD_SIZE - piece_states[piece].position[0]))
-            for piece in pawns
-        ]
-        pawns_with_dist.sort(key=lambda x: -x[1])  # Move innermost pawns first
-        pawns_sorted = [p[0] for p in pawns_with_dist]
-        
-        # Return order: back rank pieces first, then pawns
-        return back_rank_sorted + pawns_sorted
-
-    def _plan_with_strategy(self, piece_order: List[Piece], piece_states: Dict[Piece, PieceState], 
-                           targets: Dict[Piece, Tuple[float, float]], strategy: str) -> Dict[Piece, MotionPlan]:
-        """Plan moves for all pieces using a specific strategy."""
-        plans = {}
-        
-        # Create copies of piece states for planning (to avoid modifying originals during blocker movements)
-        planning_states = {}
-        for piece, state in piece_states.items():
-            planning_states[piece] = PieceState(piece, state.position, state.angle)
-        
-        for piece in piece_order:
-            state = planning_states[piece]
-            target = targets[piece]
-            motions = self._plan_piece_path_intelligent(state, target, strategy, plans, planning_states)
-            plans[piece] = MotionPlan(piece, motions, target)
-        
-        return plans
-
-    def _plan_piece_path_intelligent(self, state: PieceState, target: Tuple[float, float], 
-                                     strategy: str, planned_pieces: Dict[Piece, MotionPlan],
-                                     all_states: Dict[Piece, PieceState]) -> List[Motion]:
-        """Plan motion using intelligent collision avoidance."""
-        motions = []
-        current_pos = state.position
-        current_angle = state.angle
-        max_attempts = 8  # More attempts for intelligent planning
-        
-        for attempt in range(max_attempts):
-            dx, dy = target[0] - current_pos[0], target[1] - current_pos[1]
-            dist = math.hypot(dx, dy)
-            if dist < 1e-3:
-                break
+            piece = pieces[piece_id]
+            current_pos = piece.position
             
-            # Determine target angle
-            target_angle = math.atan2(dy, dx)
-            diff = (target_angle - current_angle + math.pi) % (2 * math.pi) - math.pi
-            reverse = abs(diff) > math.pi / 2
-            if reverse:
-                target_angle = (target_angle + math.pi) % (2 * math.pi)
-                diff = (target_angle - current_angle + math.pi) % (2 * math.pi) - math.pi
+            # Try to find a collision-free path
+            path = self._plan_piece_movement(
+                piece_id, current_pos, target_pos, 
+                occupied_positions, pieces, target_positions
+            )
             
-            # Add rotation
-            rotate_time = abs(diff) / ROTATE_SPEED
-            motions.append(Motion("rotate", (diff,), rotate_time))
-            current_angle = target_angle
-            
-            # Try strategies in order
-            path_found = False
-            
-            if strategy in ["straight", "combined"]:
-                if self._try_path_clear(current_pos, current_angle, dist, state.piece, reverse):
-                    line_time = dist / MOVE_SPEED
-                    motions.append(Motion("line", (dist,), line_time))
-                    current_pos = target
-                    path_found = True
-                    print(f"[PLANNER] {state.piece.name} -> ({target[0]:.1f}, {target[1]:.1f}) using straight line")
-            
-            if not path_found and strategy in ["curve", "combined"]:
-                # Try aggressive curved detouring
-                detour_success, detour_time, new_pos, new_angle = self._aggressive_detour(
-                    state.piece, current_pos, current_angle, target
-                )
-                if detour_success:
-                    arc_dist = detour_time * MOVE_SPEED
-                    motions.append(Motion("arc", (arc_dist / 2, math.pi / 2.5), detour_time))
-                    current_pos, current_angle = new_pos, new_angle
-                    path_found = True
-                    print(f"[PLANNER] {state.piece.name} -> ({target[0]:.1f}, {target[1]:.1f}) using arc detour to ({new_pos[0]:.1f}, {new_pos[1]:.1f})")
-            
-            if not path_found:
-                # Try moving blockers out of the way
-                blockers = self._detect_nearby_blockers(current_pos, state.piece)
-                if blockers:
-                    # Try to move blockers to the side
-                    blocker_moved = False
-                    for blocker in blockers:
-                        if self._move_blocker_to_side(blocker, all_states):
-                            blocker_moved = True
-                            break
-                    
-                    if blocker_moved:
-                        continue  # Retry path now that blocker moved
-                
-                # Last resort: small curve around obstacle
-                detour_success, detour_time, new_pos, new_angle = self._gentle_curve_detour(
-                    state.piece, current_pos, current_angle
-                )
-                if detour_success:
-                    motions.append(Motion("arc", (SAFETY_RADIUS * 2, math.pi / 4), detour_time))
-                    current_pos, current_angle = new_pos, new_angle
-                else:
-                    # Cannot find path, give up on this attempt
-                    break
+            if path:
+                paths[piece_id] = path
+                # Update occupied positions with final target
+                occupied_positions[piece_id] = target_pos
         
-        return motions
-
-    def _aggressive_detour(self, piece: Piece, pos: Tuple[float, float], angle: float, 
-                          target: Tuple[float, float]) -> Tuple[bool, float, Tuple[float, float], float]:
-        """Try larger curves to navigate around obstacles."""
-        for side in [+1, -1]:
-            for radius_mult in [2.0, 2.5, 3.0]:
-                r = SAFETY_RADIUS * radius_mult
-                arc_angle = side * math.pi / 2.5
-                
-                # Validate arc path
-                valid = True
-                steps = 15
-                for i in range(steps + 1):
-                    ang = angle + arc_angle * i / steps
-                    x = pos[0] - math.sin(angle) * r + math.sin(ang) * r
-                    y = pos[1] + math.cos(angle) * r - math.cos(ang) * r
-                    if self.board.is_collision((x, y), piece):
-                        valid = False
-                        break
-                
-                if valid:
-                    arc_len = r * abs(arc_angle)
-                    arc_time = arc_len / MOVE_SPEED
-                    new_pos = (
-                        pos[0] - math.sin(angle) * r + math.sin(angle + arc_angle) * r,
-                        pos[1] + math.cos(angle) * r - math.cos(angle + arc_angle) * r,
-                    )
-                    new_ang = (angle + arc_angle) % (2 * math.pi)
-                    return True, arc_time, new_pos, new_ang
+        return paths
+    
+    def _plan_piece_movement(self, piece_id: str, current_pos: Position,
+                             target_pos: Position, occupied: Dict[str, Position],
+                             pieces: Dict[str, Piece], 
+                             targets: Dict[str, Position]) -> Optional[MovePath]:
+        """Plan movement for a single piece with collision avoidance"""
         
-        return False, 0.0, pos, angle
-
-    def _gentle_curve_detour(self, piece: Piece, pos: Tuple[float, float], 
-                            angle: float) -> Tuple[bool, float, Tuple[float, float], float]:
-        """Try gentle curves for minor obstacle avoidance."""
-        for side in [+1, -1]:
-            r = SAFETY_RADIUS * 1.5
-            arc_angle = side * math.pi / 6
-            
-            valid = True
-            steps = 8
-            for i in range(steps + 1):
-                ang = angle + arc_angle * i / steps
-                x = pos[0] - math.sin(angle) * r + math.sin(ang) * r
-                y = pos[1] + math.cos(angle) * r - math.cos(ang) * r
-                if self.board.is_collision((x, y), piece):
-                    valid = False
-                    break
-            
-            if valid:
-                arc_len = r * abs(arc_angle)
-                arc_time = arc_len / MOVE_SPEED
-                new_pos = (
-                    pos[0] - math.sin(angle) * r + math.sin(angle + arc_angle) * r,
-                    pos[1] + math.cos(angle) * r - math.cos(angle + arc_angle) * r,
-                )
-                new_ang = (angle + arc_angle) % (2 * math.pi)
-                return True, arc_time, new_pos, new_ang
+        # Check if direct path is clear
+        if not self._has_collision(current_pos, target_pos, occupied, piece_id):
+            return self._create_path(current_pos, target_pos)
         
-        return False, 0.0, pos, angle
-
-    def _move_blocker_to_side(self, blocker: Piece, all_states: Dict[Piece, PieceState]) -> bool:
-        """Move a blocking piece to the side to clear a path."""
-        blocker_state = all_states[blocker]
-        
-        # Try moving left or right to clear center path
-        for side in [-1, +1]:
-            offset_x = side * SAFETY_RADIUS * 3
-            new_pos = (blocker_state.position[0] + offset_x, blocker_state.position[1])
+        # Direct path blocked - try detour
+        detour_point = self._find_detour_path(current_pos, target_pos, occupied)
+        if detour_point and not self._has_collision(current_pos, detour_point, occupied, piece_id):
+            # Go via detour, then to target
+            waypoints = [current_pos.copy()]
             
-            # Check if new position is valid
-            if (TOTAL_X_MIN + SAFETY_RADIUS < new_pos[0] < TOTAL_X_MAX - SAFETY_RADIUS and
-                TOTAL_Y_MIN + SAFETY_RADIUS < new_pos[1] < TOTAL_Y_MAX - SAFETY_RADIUS and
-                not self.board.is_collision(new_pos, blocker)):
-                # Actually move the blocker to the side
-                blocker_state.position = new_pos
+            # Rotate to face detour
+            dx = detour_point.x - current_pos.x
+            dy = detour_point.y - current_pos.y
+            angle1 = math.degrees(math.atan2(dy, dx)) % 360
+            waypoints.append(Position(current_pos.x, current_pos.y, angle1))
+            waypoints.append(detour_point.copy())
+            
+            # Rotate to face target
+            dx = target_pos.x - detour_point.x
+            dy = target_pos.y - detour_point.y
+            angle2 = math.degrees(math.atan2(dy, dx)) % 360
+            waypoints.append(Position(detour_point.x, detour_point.y, angle2))
+            waypoints.append(Position(target_pos.x, target_pos.y, angle2))
+            
+            # Calculate duration
+            dist1 = current_pos.distance_to(detour_point)
+            dist2 = detour_point.distance_to(target_pos)
+            rot1 = abs((angle1 - current_pos.orientation) % 360)
+            if rot1 > 180:
+                rot1 = 360 - rot1
+            rot2 = abs((angle2 - angle1) % 360)
+            if rot2 > 180:
+                rot2 = 360 - rot2
+            
+            duration = (rot1 + rot2) / 180.0 + (dist1 + dist2) / 100.0
+            
+            return MovePath(piece_id, waypoints, duration)
+        
+        # No clear path - create minimal movement
+        # Just rotate in place to target angle, then move
+        return self._create_path(current_pos, target_pos)
+    
+    def _has_collision(self, start: Position, end: Position,
+                       occupied: Dict[str, Position], exclude_id: str) -> bool:
+        """Check if path from start to end collides with occupied positions"""
+        for other_id, other_pos in occupied.items():
+            if other_id == exclude_id:
+                continue
+            
+            # Distance from piece to line segment
+            distance = self._point_to_segment_distance(other_pos, start, end)
+            if distance < self.COLLISION_DISTANCE:
                 return True
         
         return False
-
-    def _try_path_clear(self, pos: Tuple[float, float], angle: float, distance: float, 
-                       piece: Piece, reverse: bool = False) -> bool:
-        """Check if a straight path is clear."""
-        dx, dy = math.cos(angle), math.sin(angle)
-        if reverse:
-            distance *= -1
-        steps = max(1, int(abs(distance) / SAFETY_RADIUS))
-        for i in range(steps + 1):
-            check_pos = (pos[0] + dx * distance * i / steps, pos[1] + dy * distance * i / steps)
-            if self.board.is_collision(check_pos, piece):
-                return False
-        return True
-
-    def _detect_nearby_blockers(self, pos: Tuple[float, float], piece: Piece) -> List[Piece]:
-        """Find pieces that are blocking the current piece."""
-        return [p for p in self.board.pieces if p != piece and 
-                self.board.distance(pos, self.board.piece_states[p].position) < 3 * SAFETY_RADIUS]
-
-
-# --- Main ChessBoard ---
-class ChessBoard:
-    """Manages board state, pieces, and simulation."""
-
-    def __init__(self):
-        self.pieces: List[Piece] = []
-        self.piece_states: Dict[Piece, PieceState] = {}
-        self.starting_positions: List[Tuple[float, float]] = []
-        self.motion_planner: MotionPlanner = IntelligentMotionPlanner(self)
-        self.current_plan: Optional[Dict[Piece, MotionPlan]] = None
-        self.simulation_mode = False
-        self.ui = None
-
-        self.create_pieces()
-        self.starting_positions = self.get_starting_positions()
-        self.initialize_piece_states()
-
-    def create_pieces(self):
-        """Create all 32 chess pieces."""
-        Piece.reset_index()
-        self.pieces = []
-        back_row = ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
-        for name in back_row:
-            self.pieces.append(Piece(name, 'white'))
-        for _ in range(8):
-            self.pieces.append(Piece('P', 'white'))
-        for name in back_row:
-            self.pieces.append(Piece(name, 'black'))
-        for _ in range(8):
-            self.pieces.append(Piece('P', 'black'))
-
-    def initialize_piece_states(self):
-        """Initialize piece states at starting positions."""
-        self.piece_states = {}
-        for piece in self.pieces:
-            pos = self.starting_positions[piece.index]
-            self.piece_states[piece] = PieceState(piece, position=pos, angle=0.0)
-
-    def get_starting_positions(self) -> List[Tuple[float, float]]:
-        """Get standard chess starting positions."""
-        sq = BOARD_SIZE / 8
-        pos = []
-        # White back row
-        pos += [(i * sq + sq / 2, 0.5 * sq) for i in range(8)]
-        # White pawns
-        pos += [(i * sq + sq / 2, 1.5 * sq) for i in range(8)]
-        # Black back row
-        pos += [(i * sq + sq / 2, 7.5 * sq) for i in range(8)]
-        # Black pawns
-        pos += [(i * sq + sq / 2, 6.5 * sq) for i in range(8)]
-        return pos
-
-    def randomize_positions(self):
-        """Randomize piece positions without overlap (simulation mode only)."""
-        if not self.simulation_mode:
-            print("[BOARD] Cannot randomize positions outside simulation mode.")
-            return
-
-        placed = []
-        for piece in self.pieces:
-            attempts = 0
-            while attempts < 100:
-                x = random.uniform(TOTAL_X_MIN + SAFETY_RADIUS, TOTAL_X_MAX - SAFETY_RADIUS)
-                y = random.uniform(TOTAL_Y_MIN + SAFETY_RADIUS, TOTAL_Y_MAX - SAFETY_RADIUS)
-                if all(math.hypot(x - px, y - py) > 2 * SAFETY_RADIUS for px, py in placed):
-                    self.piece_states[piece].position = (x, y)
-                    self.piece_states[piece].angle = random.uniform(0, 2 * math.pi)
-                    self.piece_states[piece].at_target = False
-                    placed.append((x, y))
-                    break
-                attempts += 1
-            else:
-                print(f"[BOARD] Could not place {piece.name} after 100 attempts")
-
-        print(f"[BOARD] Randomized positions for {len(placed)} pieces")
-        if self.ui:
-            self.ui.refresh_pieces()
-
-    def distance(self, a: Tuple[float, float], b: Tuple[float, float]) -> float:
-        """Calculate Euclidean distance between two points."""
-        return math.hypot(a[0] - b[0], a[1] - b[1])
-
-    def is_collision(self, pos: Tuple[float, float], exclude_piece: Optional[Piece] = None) -> Optional[Piece]:
-        """Check if a position collides with any piece."""
-        for piece in self.pieces:
-            if piece == exclude_piece:
-                continue
-            if self.distance(pos, self.piece_states[piece].position) < 2 * SAFETY_RADIUS:
-                return piece
-        return None
-
-    def set_motion_planner(self, planner: MotionPlanner):
-        """Swap motion planner strategy."""
-        self.motion_planner = planner
-        print(f"[BOARD] Motion planner changed to {planner.__class__.__name__}")
-
-    def plan_all_moves(self):
-        """Generate motion plan to return all pieces to starting positions."""
-        if not self.simulation_mode:
-            print("[BOARD] Cannot plan moves outside simulation mode.")
+    
+    def _point_to_segment_distance(self, point: Position,
+                                    seg_start: Position, seg_end: Position) -> float:
+        """Calculate shortest distance from point to line segment"""
+        dx = seg_end.x - seg_start.x
+        dy = seg_end.y - seg_start.y
+        
+        if dx == 0 and dy == 0:
+            return point.distance_to(seg_start)
+        
+        t = max(0, min(1, ((point.x - seg_start.x) * dx + 
+                           (point.y - seg_start.y) * dy) / (dx*dx + dy*dy)))
+        
+        closest_x = seg_start.x + t * dx
+        closest_y = seg_start.y + t * dy
+        closest = Position(closest_x, closest_y)
+        
+        return point.distance_to(closest)
+    
+    def _find_detour_path(self, start: Position, end: Position,
+                          occupied: Dict[str, Position]) -> Optional[Position]:
+        """Find a perpendicular detour point to avoid obstacles"""
+        dx = end.x - start.x
+        dy = end.y - start.y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance == 0:
             return None
-
-        targets = {piece: self.starting_positions[piece.index] for piece in self.pieces}
-        self.current_plan = self.motion_planner.plan_moves(self.piece_states, targets)
-        total_time = sum(plan.total_time for plan in self.current_plan.values())
-        print(f"[BOARD] Generated motion plan. Total time: {total_time:.2f}s")
-        return self.current_plan
-
-    def execute_plan(self):
-        """Execute the current motion plan in simulation mode."""
-        if not self.simulation_mode:
-            print("[BOARD] Cannot execute plan outside simulation mode.")
-            return
-
-        if not self.current_plan:
-            print("[BOARD] No motion plan to execute.")
-            return
-
-        print("[BOARD] Executing motion plan...")
-        # Run execution in a separate thread to avoid freezing UI
-        execution_thread = threading.Thread(target=self._execute_plan_thread, daemon=True)
-        execution_thread.start()
-
-    def _execute_plan_thread(self):
-        """Execute the motion plan in a background thread."""
-        for piece, plan in self.current_plan.items():
-            state = self.piece_states[piece]
-            for motion in plan.motions:
-                if motion.kind == "rotate":
-                    self._execute_rotate(state, motion)
-                elif motion.kind == "line":
-                    self._execute_line(state, motion)
-                elif motion.kind == "arc":
-                    self._execute_arc(state, motion)
-            state.at_target = True
-
-        print("[BOARD] Motion plan execution complete.")
-        if self.ui:
-            self.ui.refresh_pieces()
-
-    def _execute_rotate(self, state: PieceState, motion: Motion):
-        """Execute a rotation motion."""
-        diff = motion.params[0]
-        steps = max(1, int(motion.duration / UPDATE_INTERVAL))
-        for _ in range(steps):
-            state.angle = state.angle + diff / steps
-            if self.ui:
-                self.ui.refresh_pieces_threadsafe()
-            time.sleep(UPDATE_INTERVAL)
-
-    def _execute_line(self, state: PieceState, motion: Motion):
-        """Execute a linear motion."""
-        distance = motion.params[0]
-        dx, dy = math.cos(state.angle), math.sin(state.angle)
-        steps = max(1, int(motion.duration / UPDATE_INTERVAL))
-        step_dist = distance / steps
-        for _ in range(steps):
-            x, y = state.position
-            new_pos = (x + dx * step_dist, y + dy * step_dist)
-            if self.is_collision(new_pos, state.piece):
-                print(f"[BOARD] {state.piece.name} blocked during execution")
-                return
-            state.position = new_pos
-            if self.ui:
-                self.ui.refresh_pieces_threadsafe()
-            time.sleep(UPDATE_INTERVAL)
-
-    def _execute_arc(self, state: PieceState, motion: Motion):
-        """Execute an arc motion."""
-        r, arc_angle = motion.params
-        cx = state.position[0] - math.sin(state.angle) * r
-        cy = state.position[1] + math.cos(state.angle) * r
-        steps = max(1, int(motion.duration / UPDATE_INTERVAL))
-        for _ in range(steps):
-            state.angle = state.angle + arc_angle / steps
-            x = cx + math.sin(state.angle) * r
-            y = cy - math.cos(state.angle) * r
-            if self.is_collision((x, y), state.piece):
-                print(f"[BOARD] {state.piece.name} blocked during arc")
-                return
-            state.position = (x, y)
-            if self.ui:
-                self.ui.refresh_pieces_threadsafe()
-            time.sleep(UPDATE_INTERVAL)
-
-
-# --- UI ---
-class ChessBoardUI:
-    """Main UI for the robotic chessboard coordinator."""
-
-    def __init__(self, root, board):
-        self.root = root
-        self.board = board
-        board.ui = self
-        self.canvas_size = 600
         
-        # Main canvas
-        self.canvas = tk.Canvas(root, width=self.canvas_size, height=self.canvas_size, bg="white")
-        self.canvas.pack()
-
-        # Debug panel frame
-        debug_frame = tk.Frame(root, relief=tk.SUNKEN, borderwidth=2)
-        debug_frame.pack(fill=tk.X, padx=5, pady=5)
-
-        # Simulation mode toggle
-        mode_frame = tk.Frame(debug_frame)
-        mode_frame.pack(anchor=tk.W, padx=5, pady=5)
-        tk.Label(mode_frame, text="Mode:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
-        self.sim_var = tk.BooleanVar(value=False)
-        self.sim_switch = tk.Checkbutton(mode_frame, text="Simulation Mode", variable=self.sim_var, command=self.toggle_simulation_mode)
-        self.sim_switch.pack(side=tk.LEFT, padx=10)
-        self.mode_label = tk.Label(mode_frame, text="[Real Mode]", fg="red", font=("Arial", 9))
-        self.mode_label.pack(side=tk.LEFT, padx=10)
-
-        # Control buttons
-        button_frame = tk.Frame(debug_frame)
-        button_frame.pack(anchor=tk.W, padx=5, pady=5)
-        tk.Label(button_frame, text="Controls:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
-        tk.Button(button_frame, text="Randomize", command=self.randomize_pieces, state=tk.DISABLED).pack(side=tk.LEFT, padx=3)
-        tk.Button(button_frame, text="Plan Moves", command=self.plan_moves, state=tk.DISABLED).pack(side=tk.LEFT, padx=3)
-        tk.Button(button_frame, text="Execute", command=self.execute_moves, state=tk.DISABLED).pack(side=tk.LEFT, padx=3)
+        # Try perpendicular offsets
+        perp_x = -dy / distance
+        perp_y = dx / distance
         
-        self.randomize_btn = button_frame.winfo_children()[1]
-        self.plan_btn = button_frame.winfo_children()[2]
-        self.execute_btn = button_frame.winfo_children()[3]
-
-        # Motion Planner selection
-        planner_frame = tk.Frame(debug_frame)
-        planner_frame.pack(anchor=tk.W, padx=5, pady=5)
-        tk.Label(planner_frame, text="Planner:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
-        self.planner_var = tk.StringVar(value="intelligent")
-        tk.Radiobutton(planner_frame, text="Intelligent", variable=self.planner_var, value="intelligent", 
-                      command=self.switch_planner, state=tk.DISABLED).pack(side=tk.LEFT, padx=5)
-        tk.Radiobutton(planner_frame, text="Basic", variable=self.planner_var, value="basic", 
-                      command=self.switch_planner, state=tk.DISABLED).pack(side=tk.LEFT, padx=5)
-        self.planner_buttons = planner_frame.winfo_children()[1:]
-
-        self.current_plan = None
-        self.draw_grid()
-        self.refresh_pieces()
-
-    def toggle_simulation_mode(self):
-        """Toggle between simulation and real mode."""
-        self.board.simulation_mode = self.sim_var.get()
-        if self.board.simulation_mode:
-            self.mode_label.config(text="[Simulation Mode]", fg="green")
-            self.randomize_btn.config(state=tk.NORMAL)
-            self.plan_btn.config(state=tk.NORMAL)
-            self.execute_btn.config(state=tk.NORMAL)
-            for btn in self.planner_buttons:
-                btn.config(state=tk.NORMAL)
-            print("[UI] Entered simulation mode")
-        else:
-            self.mode_label.config(text="[Real Mode]", fg="red")
-            self.randomize_btn.config(state=tk.DISABLED)
-            self.plan_btn.config(state=tk.DISABLED)
-            self.execute_btn.config(state=tk.DISABLED)
-            for btn in self.planner_buttons:
-                btn.config(state=tk.DISABLED)
-            # Reset all pieces to starting positions
-            self.board.initialize_piece_states()
-            self.refresh_pieces()
-            print("[UI] Entered real mode")
-
-    def randomize_pieces(self):
-        """Randomize piece positions in simulation mode."""
-        if self.board.simulation_mode:
-            self.board.randomize_positions()
-
-    def switch_planner(self):
-        """Switch between motion planning strategies."""
-        planner_type = self.planner_var.get()
-        if planner_type == "intelligent":
-            self.board.set_motion_planner(IntelligentMotionPlanner(self.board))
-            print("[UI] Switched to Intelligent Motion Planner")
-        else:
-            self.board.set_motion_planner(BasicMotionPlanner(self.board))
-            print("[UI] Switched to Basic Motion Planner")
-
-    def plan_moves(self):
-        """Generate motion plan in simulation mode."""
-        if self.board.simulation_mode:
-            self.current_plan = self.board.plan_all_moves()
-            if self.current_plan:
-                print(f"[UI] Generated plan for {len(self.current_plan)} pieces")
-                self.show_planned_paths()
-
-    def show_planned_paths(self):
-        """Visualize planned paths as dotted lines."""
-        if not self.current_plan:
-            return
+        # Try both sides, at 1.5x the piece diameter
+        offset_distance = PIECE_RADIUS * 3
         
-        self.canvas.delete("path")
-        scale = self.canvas_size / (BOARD_SIZE + 2 * SIDE_ZONE)
+        for detour_point in [
+            Position(start.x + perp_x * offset_distance, start.y + perp_y * offset_distance, 0),
+            Position(start.x - perp_x * offset_distance, start.y - perp_y * offset_distance, 0),
+        ]:
+            # Check if this detour point is valid
+            if not self._point_in_collision(detour_point, occupied):
+                return detour_point
         
-        for piece, plan in self.current_plan.items():
-            state = self.board.piece_states[piece]
-            current_pos = state.position
-            current_angle = state.angle
+        return None
+    
+    def _point_in_collision(self, point: Position, occupied: Dict[str, Position]) -> bool:
+        """Check if a point collides with any occupied position"""
+        for other_pos in occupied.values():
+            if point.distance_to(other_pos) < self.COLLISION_DISTANCE:
+                return True
+        return False
+    
+    def _create_path(self, start: Position, end: Position) -> MovePath:
+        """Create a basic path: rotate then move forward"""
+        waypoints = [start.copy()]
+        
+        # Calculate angle to target
+        dx = end.x - start.x
+        dy = end.y - start.y
+        target_angle = math.degrees(math.atan2(dy, dx)) % 360
+        
+        # Rotation step
+        waypoints.append(Position(start.x, start.y, target_angle))
+        
+        # Movement step
+        waypoints.append(Position(end.x, end.y, target_angle))
+        
+        # Duration: rotation + movement
+        angle_diff = abs((target_angle - start.orientation) % 360)
+        if angle_diff > 180:
+            angle_diff = 360 - angle_diff
+        rotation_time = angle_diff / 180.0
+        movement_time = start.distance_to(end) / 100.0
+        
+        return MovePath("temp", waypoints, rotation_time + movement_time)
+    
+    def get_name(self) -> str:
+        return "Collision-Aware Planner"
+
+# ============================================================================
+# Simulator Engine
+# ============================================================================
+
+class SimulatorEngine:
+    """Manages piece simulation and movement execution"""
+    
+    def __init__(self):
+        self.state = SimulatorState(pieces={})
+        self.current_piece_path: Optional[MovePath] = None
+        self.current_waypoint_index: int = 0
+        self.piece_start_time: float = 0.0
+        
+    def initialize_board(self):
+        """Initialize chess pieces at starting positions"""
+        self.state.pieces = {}
+        for piece_id, (col, row) in PIECE_START_POSITIONS.items():
+            # Use board_coords_to_world to center pieces on their squares
+            x, y = board_coords_to_world(col, row)
+            pos = Position(x, y, 0)
+            self.state.pieces[piece_id] = Piece(piece_id, pos, pos.copy())
+    
+    def randomize_positions(self):
+        """Randomize piece positions on the board"""
+        board_width = 8 * BOARD_SQUARE_SIZE
+        board_height = 8 * BOARD_SQUARE_SIZE
+        
+        # Keep trying to place pieces until no collisions
+        max_attempts = 100
+        for attempt in range(max_attempts):
+            positions = {}
+            valid = True
             
-            # Draw path segments for each motion
-            for motion in plan.motions:
-                if motion.kind == "rotate":
-                    # Update angle for next segment
-                    current_angle = (current_angle + motion.params[0]) % (2 * math.pi)
-                    continue
-                elif motion.kind == "line":
-                    # Draw straight line segment
-                    distance = motion.params[0]
-                    dx = math.cos(current_angle)
-                    dy = math.sin(current_angle)
-                    end_pos = (current_pos[0] + dx * distance, current_pos[1] + dy * distance)
+            for piece_id in self.state.pieces.keys():
+                for _ in range(10):  # Try up to 10 times per piece
+                    x = BOARD_EXTRA_SIDE + random.uniform(0, board_width)
+                    y = random.uniform(0, board_height)
+                    angle = random.uniform(0, 360)
+                    pos = Position(x, y, angle)
                     
-                    x1 = (current_pos[0] + SIDE_ZONE) * scale
-                    y1 = (BOARD_SIZE - current_pos[1]) * scale
-                    x2 = (end_pos[0] + SIDE_ZONE) * scale
-                    y2 = (BOARD_SIZE - end_pos[1]) * scale
+                    # Check collision with existing positions
+                    collision = False
+                    for other_pos in positions.values():
+                        if pos.distance_to(other_pos) < PIECE_RADIUS * 2 + 10:
+                            collision = True
+                            break
                     
-                    self.canvas.create_line(x1, y1, x2, y2, fill="orange", dash=(3, 3), width=2, tags="path")
-                    current_pos = end_pos
-                    
-                elif motion.kind == "arc":
-                    # Draw arc segment (approximated with line segments)
-                    r, arc_angle = motion.params
-                    cx = current_pos[0] - math.sin(current_angle) * r
-                    cy = current_pos[1] + math.cos(current_angle) * r
-                    
-                    arc_steps = max(5, int(abs(arc_angle) / 0.1))
-                    for i in range(arc_steps):
-                        t1 = i / arc_steps
-                        t2 = (i + 1) / arc_steps
-                        
-                        angle1 = current_angle + arc_angle * t1
-                        angle2 = current_angle + arc_angle * t2
-                        
-                        x1_world = cx + math.sin(angle1) * r
-                        y1_world = cy - math.cos(angle1) * r
-                        x2_world = cx + math.sin(angle2) * r
-                        y2_world = cy - math.cos(angle2) * r
-                        
-                        x1 = (x1_world + SIDE_ZONE) * scale
-                        y1 = (BOARD_SIZE - y1_world) * scale
-                        x2 = (x2_world + SIDE_ZONE) * scale
-                        y2 = (BOARD_SIZE - y2_world) * scale
-                        
-                        self.canvas.create_line(x1, y1, x2, y2, fill="orange", dash=(3, 3), width=2, tags="path")
-                    
-                    # Update current position and angle
-                    current_angle = (current_angle + arc_angle) % (2 * math.pi)
-                    current_pos = (cx + math.sin(current_angle) * r, cy - math.cos(current_angle) * r)
-        
-        # Refresh pieces on top of paths
-        self.refresh_pieces()
-
-    def execute_moves(self):
-        """Execute motion plan in simulation mode."""
-        if self.board.simulation_mode:
-            if self.current_plan:
-                # Disable buttons during execution
-                self.plan_btn.config(state=tk.DISABLED)
-                self.execute_btn.config(state=tk.DISABLED)
-                self.randomize_btn.config(state=tk.DISABLED)
-                
-                # Execute plan
-                self.board.execute_plan()
-                
-                # Re-enable buttons after a delay (plan execution time)
-                # Schedule re-enable after 1 second to let execution start
-                self.root.after(1000, self._re_enable_buttons)
-                
-                # Clear paths after execution
-                self.canvas.delete("path")
-            else:
-                print("[UI] No plan to execute. Run 'Plan Moves' first.")
-
-    def _re_enable_buttons(self):
-        """Re-enable control buttons after execution completes."""
-        if self.board.simulation_mode:
-            self.plan_btn.config(state=tk.NORMAL)
-            self.execute_btn.config(state=tk.NORMAL)
-            self.randomize_btn.config(state=tk.NORMAL)
-
-    def draw_grid(self):
-        """Draw the chess board grid."""
-        self.canvas.delete("grid")
-        sq = self.canvas_size / (BOARD_SIZE + 2 * SIDE_ZONE)
-        for i in range(9):
-            y = i * (BOARD_SIZE / 8) * sq
-            self.canvas.create_line(SIDE_ZONE * sq, y, (BOARD_SIZE + SIDE_ZONE) * sq, y, fill="gray", tags="grid")
-            self.canvas.create_line(i * (BOARD_SIZE / 8) * sq + SIDE_ZONE * sq, 0, i * (BOARD_SIZE / 8) * sq + SIDE_ZONE * sq, BOARD_SIZE * sq, fill="gray", tags="grid")
-
-    def refresh_pieces(self):
-        """Redraw all pieces on the canvas."""
-        self.canvas.delete("piece")
-        scale = self.canvas_size / (BOARD_SIZE + 2 * SIDE_ZONE)
-        for piece in self.board.pieces:
-            state = self.board.piece_states[piece]
-            x = (state.position[0] + SIDE_ZONE) * scale
-            y = (BOARD_SIZE - state.position[1]) * scale
-            r = PIECE_RADIUS * scale
-            fill = "white" if piece.color == "white" else "black"
-            outline = "green" if state.at_target else "blue"
+                    if not collision:
+                        positions[piece_id] = pos
+                        break
             
-            # Normalize angle for display (sin/cos work on any angle, but normalize for clarity)
-            display_angle = state.angle % (2 * math.pi)
+            if len(positions) == len(self.state.pieces):
+                for piece_id, pos in positions.items():
+                    self.state.pieces[piece_id].position = pos
+                return
+        
+        print("Warning: Could not randomize positions without collisions")
+    
+    def start_execution(self, paths: Dict[str, MovePath]):
+        """Start executing movement paths"""
+        self.state.paths = paths
+        self.state.executing = True
+        
+        # Start with first piece that has a path
+        for piece_id, path in paths.items():
+            self.state.current_piece_executing = piece_id
+            self.current_piece_path = path
+            self.current_waypoint_index = 0
+            self.piece_start_time = time.time()
+            break
+    
+    def stop_execution(self):
+        """Stop executing movements"""
+        self.state.executing = False
+        self.state.current_piece_executing = None
+        self.current_piece_path = None
+    
+    def update(self, dt: float) -> bool:
+        """Update simulator state. Returns True if still executing"""
+        if not self.state.executing or not self.state.current_piece_executing:
+            return False
+        
+        if not self.current_piece_path:
+            return False
+        
+        piece_id = self.state.current_piece_executing
+        piece = self.state.pieces[piece_id]
+        path = self.current_piece_path
+        
+        # Check if we have any waypoints
+        if len(path.waypoints) < 2:
+            # Skip to next piece
+            self._move_to_next_piece()
+            return self.state.executing
+        
+        elapsed = time.time() - self.piece_start_time
+        progress = min(1.0, elapsed / max(path.duration, 0.1))
+        
+        if progress >= 1.0:
+            # Piece reached final waypoint, move to next piece
+            piece.position = path.waypoints[-1].copy()
+            self._move_to_next_piece()
+            return self.state.executing
+        else:
+            # Calculate which segment we're on based on waypoint distances
+            waypoints = path.waypoints
+            
+            # Calculate cumulative distances for each waypoint
+            cumulative_distances = [0.0]
+            for i in range(1, len(waypoints)):
+                dist = waypoints[i-1].distance_to(waypoints[i])
+                cumulative_distances.append(cumulative_distances[-1] + dist)
+            
+            total_distance = cumulative_distances[-1]
+            
+            if total_distance > 0:
+                # Find target distance based on progress
+                target_distance = total_distance * progress
+                
+                # Find which segment this falls into
+                segment_idx = 0
+                for i in range(len(cumulative_distances) - 1):
+                    if target_distance >= cumulative_distances[i]:
+                        segment_idx = i
+                    else:
+                        break
+                
+                # Get the start and end waypoints of this segment
+                if segment_idx < len(waypoints) - 1:
+                    start_wp = waypoints[segment_idx]
+                    end_wp = waypoints[segment_idx + 1]
+                    
+                    # Calculate progress within this segment
+                    segment_start_dist = cumulative_distances[segment_idx]
+                    segment_end_dist = cumulative_distances[segment_idx + 1]
+                    segment_length = segment_end_dist - segment_start_dist
+                    
+                    if segment_length > 0:
+                        segment_progress = (target_distance - segment_start_dist) / segment_length
+                        segment_progress = max(0.0, min(1.0, segment_progress))
+                    else:
+                        segment_progress = 0.0
+                    
+                    # Linear interpolation within segment
+                    piece.position.x = start_wp.x + (end_wp.x - start_wp.x) * segment_progress
+                    piece.position.y = start_wp.y + (end_wp.y - start_wp.y) * segment_progress
+                    
+                    # Interpolate orientation
+                    piece.position.orientation = start_wp.orientation + \
+                        (end_wp.orientation - start_wp.orientation) * segment_progress
+        
+        return True
+    
+    def _move_to_next_piece(self):
+        """Move to the next piece that has a path"""
+        if not self.state.current_piece_executing:
+            return
+        
+        piece_ids = list(self.state.paths.keys())
+        if not piece_ids:
+            self.state.executing = False
+            return
+        
+        current_index = piece_ids.index(self.state.current_piece_executing)
+        
+        found_next = False
+        for i in range(current_index + 1, len(piece_ids)):
+            next_id = piece_ids[i]
+            if next_id in self.state.paths:
+                self.state.current_piece_executing = next_id
+                self.current_piece_path = self.state.paths[next_id]
+                self.piece_start_time = time.time()
+                found_next = True
+                break
+        
+        if not found_next:
+            # All pieces finished
+            self.state.executing = False
+    
+    def check_collisions(self) -> List[Tuple[str, str]]:
+        """Check for piece collisions. Returns list of colliding pairs"""
+        collisions = []
+        piece_ids = list(self.state.pieces.keys())
+        
+        for i, pid1 in enumerate(piece_ids):
+            for pid2 in piece_ids[i+1:]:
+                piece1 = self.state.pieces[pid1]
+                piece2 = self.state.pieces[pid2]
+                
+                distance = piece1.position.distance_to(piece2.position)
+                if distance < PIECE_RADIUS * 2:
+                    collisions.append((pid1, pid2))
+        
+        return collisions
+    
+    def get_total_move_time(self) -> float:
+        """Get estimated total move time for current paths"""
+        if not self.state.paths:
+            return 0.0
+        return sum(path.duration for path in self.state.paths.values())
+
+# ============================================================================
+# UI and Rendering
+# ============================================================================
+
+class ChessRobotUI:
+    """Pygame UI for the chess robot coordinator"""
+    
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+        pygame.display.set_caption("Chess Robot Coordinator - Simulator")
+        self.clock = pygame.time.Clock()
+        self.font_small = pygame.font.Font(None, 24)
+        self.font_medium = pygame.font.Font(None, 32)
+        self.font_large = pygame.font.Font(None, 48)
+        
+        self.simulator = SimulatorEngine()
+        self.path_planner: PathPlanner = SequentialPathPlanner()
+        self.running = True
+        
+        self.simulator.initialize_board()
+        
+        # UI state
+        self.show_paths = True
+        self.planner_index = 0
+        self.available_planners = [SequentialPathPlanner(), CollisionAwarePathPlanner()]
+        
+    def get_display_position(self, x: float, y: float) -> Tuple[int, int]:
+        """Convert world coordinates (mm) to display coordinates (pixels)"""
+        # Account for board offset in world space (pieces placed with offset)
+        # x is absolute position in mm including BOARD_EXTRA_SIDE offset
+        # We need to convert to display space
+        board_x = x - BOARD_EXTRA_SIDE  # Remove world offset to get board-relative position
+        display_x = BOARD_DISPLAY_OFFSET_X + (board_x / BOARD_SQUARE_SIZE) * BOARD_DISPLAY_SQUARE_SIZE
+        display_y = BOARD_DISPLAY_OFFSET_Y + (y / BOARD_SQUARE_SIZE) * BOARD_DISPLAY_SQUARE_SIZE
+        return int(display_x), int(display_y)
+    
+    def draw_board(self):
+        """Draw the chess board"""
+        # Draw board squares
+        for row in range(8):
+            for col in range(8):
+                x = BOARD_DISPLAY_OFFSET_X + col * BOARD_DISPLAY_SQUARE_SIZE
+                y = BOARD_DISPLAY_OFFSET_Y + row * BOARD_DISPLAY_SQUARE_SIZE
+                
+                color = (240, 217, 181) if (row + col) % 2 == 0 else (181, 136, 99)
+                pygame.draw.rect(self.screen, color, (x, y, BOARD_DISPLAY_SQUARE_SIZE, BOARD_DISPLAY_SQUARE_SIZE))
+                pygame.draw.rect(self.screen, (0, 0, 0), (x, y, BOARD_DISPLAY_SQUARE_SIZE, BOARD_DISPLAY_SQUARE_SIZE), 1)
+        
+        # Draw coordinate labels
+        for i in range(8):
+            label = chr(ord('a') + i)
+            x = BOARD_DISPLAY_OFFSET_X + i * BOARD_DISPLAY_SQUARE_SIZE + BOARD_DISPLAY_SQUARE_SIZE // 2
+            y = BOARD_DISPLAY_OFFSET_Y + 8 * BOARD_DISPLAY_SQUARE_SIZE + 5
+            text = self.font_small.render(label, True, (0, 0, 0))
+            self.screen.blit(text, (x - text.get_width() // 2, y))
+            
+            label = str(8 - i)
+            x = BOARD_DISPLAY_OFFSET_X - 25
+            y = BOARD_DISPLAY_OFFSET_Y + i * BOARD_DISPLAY_SQUARE_SIZE + BOARD_DISPLAY_SQUARE_SIZE // 2
+            text = self.font_small.render(label, True, (0, 0, 0))
+            self.screen.blit(text, (x, y - text.get_height() // 2))
+    
+    def draw_pieces(self):
+        """Draw all pieces"""
+        for piece in self.simulator.state.pieces.values():
+            display_x, display_y = self.get_display_position(piece.position.x, piece.position.y)
             
             # Draw piece circle
-            self.canvas.create_oval(x - r, y - r, x + r, y + r, fill=fill, outline=outline, width=2, tags="piece")
-            # Draw safety radius
-            self.canvas.create_oval(x - r * 1.3, y - r * 1.3, x + r * 1.3, y + r * 1.3, outline="gray", dash=(2, 2), tags="piece")
-            # Draw orientation indicator using normalized angle
-            self.canvas.create_line(x, y, x + r * math.cos(display_angle), y - r * math.sin(display_angle), fill="red", width=2, tags="piece")
+            color = (100, 200, 255) if piece.id.isupper() else (255, 150, 100)
+            pygame.draw.circle(self.screen, color, (display_x, display_y), 15, 0)
+            pygame.draw.circle(self.screen, (0, 0, 0), (display_x, display_y), 15, 2)
+            
+            # Draw orientation indicator (line from center)
+            angle_rad = math.radians(piece.position.orientation)
+            end_x = display_x + 12 * math.cos(angle_rad)
+            end_y = display_y + 12 * math.sin(angle_rad)
+            pygame.draw.line(self.screen, (0, 0, 0), (display_x, display_y), (end_x, end_y), 2)
+            
             # Draw piece label
-            self.canvas.create_text(x, y, text=piece.name, fill="red" if piece.color == "white" else "white", tags="piece")
+            label_text = self.font_small.render(piece.id, True, (0, 0, 0))
+            self.screen.blit(label_text, (display_x - label_text.get_width() // 2, display_y - label_text.get_height() // 2))
+    
+    def draw_paths(self):
+        """Draw planned movement paths as dotted lines"""
+        if not self.show_paths or not self.simulator.state.paths:
+            return
+        
+        for path in self.simulator.state.paths.values():
+            waypoints = path.waypoints
+            if len(waypoints) < 2:
+                continue
+            
+            # Draw dotted line between waypoints
+            for i in range(len(waypoints) - 1):
+                start = waypoints[i]
+                end = waypoints[i + 1]
+                
+                start_display = self.get_display_position(start.x, start.y)
+                end_display = self.get_display_position(end.x, end.y)
+                
+                # Draw dotted line
+                self._draw_dotted_line(start_display, end_display, (150, 150, 150), 3, 5)
+            
+            # Draw target position marker
+            if len(waypoints) > 0:
+                target = waypoints[-1]
+                display_x, display_y = self.get_display_position(target.x, target.y)
+                pygame.draw.circle(self.screen, (100, 255, 100), (display_x, display_y), 8, 2)
+    
+    def _draw_dotted_line(self, start: Tuple[int, int], end: Tuple[int, int],
+                          color: Tuple[int, int, int], dot_size: int, gap: int):
+        """Draw a dotted line"""
+        x1, y1 = start
+        x2, y2 = end
+        
+        distance = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        if distance == 0:
+            return
+        
+        steps = int(distance / (dot_size + gap))
+        for i in range(steps):
+            t = i / max(steps, 1)
+            x = int(x1 + (x2 - x1) * t)
+            y = int(y1 + (y2 - y1) * t)
+            pygame.draw.circle(self.screen, color, (x, y), dot_size // 2)
+    
+    def draw_ui_buttons(self):
+        """Draw UI control buttons"""
+        buttons = [
+            {"label": "Randomize", "action": "randomize", "x": 750, "y": 100},
+            {"label": "Plan Moves", "action": "plan", "x": 750, "y": 160},
+            {"label": "Execute", "action": "execute", "x": 750, "y": 220},
+        ]
+        
+        for btn in buttons:
+            rect = pygame.Rect(btn["x"], btn["y"], 150, 40)
+            pygame.draw.rect(self.screen, (200, 200, 200), rect)
+            pygame.draw.rect(self.screen, (0, 0, 0), rect, 2)
+            
+            text = self.font_small.render(btn["label"], True, (0, 0, 0))
+            self.screen.blit(text, (rect.centerx - text.get_width() // 2, rect.centery - text.get_height() // 2))
+            
+            btn["rect"] = rect
+    
+    def draw_status(self):
+        """Draw status information"""
+        y_offset = 100
+        
+        # Planner name
+        planner_name = self.path_planner.get_name()
+        text = self.font_small.render(f"Planner: {planner_name}", True, (0, 0, 0))
+        self.screen.blit(text, (750, y_offset + 300))
+        
+        # Execution status
+        status = "Executing..." if self.simulator.state.executing else "Idle"
+        status_color = (255, 0, 0) if self.simulator.state.executing else (0, 100, 0)
+        text = self.font_small.render(f"Status: {status}", True, status_color)
+        self.screen.blit(text, (750, y_offset + 330))
+        
+        # Total move time
+        total_time = self.simulator.get_total_move_time()
+        text = self.font_small.render(f"Move Time: {total_time:.1f}s", True, (0, 0, 0))
+        self.screen.blit(text, (750, y_offset + 360))
+        
+        # Collision status
+        collisions = self.simulator.check_collisions()
+        if collisions:
+            text = self.font_small.render(f"COLLISIONS: {len(collisions)}", True, (255, 0, 0))
+        else:
+            text = self.font_small.render("No collisions", True, (0, 100, 0))
+        self.screen.blit(text, (750, y_offset + 390))
+    
+    def handle_input(self):
+        """Handle user input"""
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                self.handle_button_click(mouse_pos)
+            elif event.type == pygame.KEYDOWN:
+                self.handle_key_press(event.key)
+    
+    def handle_button_click(self, mouse_pos: Tuple[int, int]):
+        """Handle button clicks"""
+        buttons = [
+            {"action": "randomize", "rect": pygame.Rect(750, 100, 150, 40)},
+            {"action": "plan", "rect": pygame.Rect(750, 160, 150, 40)},
+            {"action": "execute", "rect": pygame.Rect(750, 220, 150, 40)},
+        ]
+        
+        for btn in buttons:
+            if btn["rect"].collidepoint(mouse_pos):
+                if btn["action"] == "randomize":
+                    self.simulator.randomize_positions()
+                    print("Positions randomized")
+                elif btn["action"] == "plan":
+                    self.plan_movements()
+                    print("Movements planned")
+                elif btn["action"] == "execute":
+                    if self.simulator.state.paths:
+                        self.simulator.start_execution(self.simulator.state.paths)
+                        print("Execution started")
+    
+    def handle_key_press(self, key: int):
+        """Handle keyboard input"""
+        if key == pygame.K_SPACE:
+            # Toggle between planners
+            self.planner_index = (self.planner_index + 1) % len(self.available_planners)
+            self.path_planner = self.available_planners[self.planner_index]
+            print(f"Switched to {self.path_planner.get_name()}")
+        elif key == pygame.K_p:
+            # Toggle path display
+            self.show_paths = not self.show_paths
+            print(f"Path display: {'ON' if self.show_paths else 'OFF'}")
+        elif key == pygame.K_r:
+            # Reset
+            self.simulator.stop_execution()
+            self.simulator.initialize_board()
+            print("Board reset")
+    
+    def plan_movements(self):
+        """Plan movements to start positions"""
+        target_positions = {}
+        for piece_id, (col, row) in PIECE_START_POSITIONS.items():
+            # Use board_coords_to_world to center pieces on their target squares
+            x, y = board_coords_to_world(col, row)
+            target_positions[piece_id] = Position(x, y, 0)
+        
+        paths = self.path_planner.plan_movements(self.simulator.state.pieces, target_positions)
+        self.simulator.state.paths = paths
+    
+    def run(self):
+        """Main UI loop"""
+        print("\n=== Chess Robot Coordinator ===")
+        print("Controls:")
+        print("  - Click 'Randomize' to randomize piece positions")
+        print("  - Click 'Plan Moves' to plan movements to starting positions")
+        print("  - Click 'Execute' to execute the planned movements")
+        print("  - Press SPACE to switch between path planners")
+        print("  - Press P to toggle path display")
+        print("  - Press R to reset the board")
+        print()
+        
+        while self.running:
+            dt = self.clock.tick(60) / 1000.0
+            
+            self.handle_input()
+            self.simulator.update(dt)
+            
+            # Draw everything
+            self.screen.fill((255, 255, 255))
+            self.draw_board()
+            self.draw_paths()
+            self.draw_pieces()
+            self.draw_ui_buttons()
+            self.draw_status()
+            
+            pygame.display.flip()
+        
+        pygame.quit()
 
-    def refresh_pieces_threadsafe(self):
-        """Thread-safe refresh that schedules canvas updates on the main thread."""
-        self.root.after(0, self.refresh_pieces)
+# ============================================================================
+# Testing and Benchmarking
+# ============================================================================
 
+class PathPlannerBenchmark:
+    """Benchmark path planning algorithms"""
+    
+    def __init__(self, iterations: int = 10):
+        self.iterations = iterations
+        self.results = {}
+    
+    def benchmark_planner(self, planner: PathPlanner) -> Dict:
+        """Benchmark a path planner over multiple randomizations"""
+        simulator = SimulatorEngine()
+        simulator.initialize_board()
+        
+        total_move_time = 0.0
+        total_execution_time = 0.0
+        collision_count = 0
+        accuracy_errors = []
+        
+        print(f"\nBenchmarking {planner.get_name()}...")
+        print(f"Running {self.iterations} iterations...")
+        
+        for iteration in range(self.iterations):
+            # Randomize positions
+            simulator.randomize_positions()
+            
+            # Plan movements
+            target_positions = {}
+            for piece_id, (col, row) in PIECE_START_POSITIONS.items():
+                x = BOARD_EXTRA_SIDE + col * BOARD_SQUARE_SIZE
+                y = row * BOARD_SQUARE_SIZE
+                target_positions[piece_id] = Position(x, y, 0)
+            
+            paths = planner.plan_movements(simulator.state.pieces, target_positions)
+            simulator.state.paths = paths
+            
+            # Execute and measure
+            move_time = simulator.get_total_move_time()
+            total_move_time += move_time
+            
+            # Simulate execution to check for collisions
+            simulator.start_execution(paths)
+            sim_start_time = time.time()
+            
+            while simulator.state.executing:
+                simulator.update(0.016)  # ~60 FPS
+            
+            execution_time = time.time() - sim_start_time
+            total_execution_time += execution_time
+            
+            # Check final positions
+            collisions = simulator.check_collisions()
+            collision_count += len(collisions)
+            
+            # Check accuracy
+            for piece_id, piece in simulator.state.pieces.items():
+                if piece_id in target_positions:
+                    error = piece.position.distance_to(target_positions[piece_id])
+                    accuracy_errors.append(error)
+            
+            if (iteration + 1) % max(1, self.iterations // 5) == 0:
+                print(f"  {iteration + 1}/{self.iterations} completed")
+        
+        # Calculate statistics
+        avg_move_time = total_move_time / self.iterations
+        avg_execution_time = total_execution_time / self.iterations
+        avg_accuracy = sum(accuracy_errors) / len(accuracy_errors) if accuracy_errors else 0
+        collision_rate = collision_count / self.iterations
+        
+        results = {
+            "planner": planner.get_name(),
+            "iterations": self.iterations,
+            "avg_move_time": avg_move_time,
+            "avg_execution_time": avg_execution_time,
+            "total_move_time": total_move_time,
+            "collisions": collision_count,
+            "collision_rate": collision_rate,
+            "avg_accuracy_error": avg_accuracy,
+        }
+        
+        return results
+    
+    def print_results(self, results: Dict):
+        """Print benchmark results"""
+        print("\n" + "=" * 60)
+        print(f"Results for {results['planner']}")
+        print("=" * 60)
+        print(f"Iterations:           {results['iterations']}")
+        print(f"Avg Move Time:        {results['avg_move_time']:.2f}s")
+        print(f"Total Move Time:      {results['total_move_time']:.2f}s")
+        print(f"Avg Execution Time:   {results['avg_execution_time']:.2f}s")
+        print(f"Total Collisions:     {results['collisions']}")
+        print(f"Collision Rate:       {results['collision_rate']:.2f}")
+        print(f"Avg Accuracy Error:   {results['avg_accuracy_error']:.2f}mm")
+        print("=" * 60)
 
-# --- Run app ---
+# ============================================================================
+# Main
+# ============================================================================
+
 if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("Robotic Chessboard Coordinator")
-    board = ChessBoard()
-    ui = ChessBoardUI(root, board)
-    root.mainloop()
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "benchmark":
+        # Run benchmark mode
+        iterations = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+        benchmark = PathPlannerBenchmark(iterations=iterations)
+        
+        planners = [SequentialPathPlanner(), CollisionAwarePathPlanner()]
+        
+        for planner in planners:
+            results = benchmark.benchmark_planner(planner)
+            benchmark.print_results(results)
+    else:
+        # Run UI mode
+        ui = ChessRobotUI()
+        ui.run()
