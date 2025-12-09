@@ -86,13 +86,12 @@ private:
     uint8_t system_status;
 
 public:
-    // Motor and motion control constants
+    // Motor and motion control constants. All commands should be within these bounds otherwise timing may be off.
     static constexpr float STEPS_PER_REVOLUTION = 64.0f;
     static constexpr float ROBOT_MAX_VELOCITY_MM_S = 150.0f;
     static constexpr float ROBOT_MAX_ACCEL_MM_S2 = 50.0f;
     static constexpr float MAX_ROT_VEL_RAD_S = 2.0f;
     static constexpr float MAX_ROT_ACCEL_RAD_S2 = 10.0f;
-    static constexpr float STEPPER_MAX_VELOCITY_MM_S = 200.0f;
     
     StepperDriver left_wheel;
     StepperDriver right_wheel;
