@@ -1,7 +1,7 @@
 #ifndef __ROBOT_H__
 #define __ROBOT_H__
 
-#include "pins.h"
+#include "config.h"
 #include "motion_queue.h"
 #include "esp_now_communicator.h"
 #include <Arduino.h>
@@ -25,15 +25,36 @@ public:
     int32_t current_step_count;
     int32_t target_step_count;
     
+private:
+    bool reverse_motor;  // If true, reverses the direction signal
+    
+public:
     /**
      * Initialize stepper driver with GPIO pins
      * @param step GPIO pin for step signal
      * @param dir GPIO pin for direction signal
      * @param enable GPIO pin for enable signal
      * @param reset GPIO pin for reset signal
+     * @param reverse If true, reverse the motor direction
      * @return true on success, false on failure
      */
-    bool initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_t reset);
+    bool initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_t reset, bool reverse = false);
+
+    /**
+     * Set microstepping mode. Requires driver reset after setting.
+     * Remember the reset and en pins are shared, so set both drivers
+     * first before resetting.
+     * @param step_lvl Logic level for STEP pin
+     * @param dir_lvl Logic level for DIR pin
+     * @return true on success, false on failure
+     */
+    bool setMicrostepping(bool step_lvl, bool dir_lvl);
+
+    /**
+     * Reset the stepper driver
+     * @return true on success, false on failure
+     */
+    bool resetDriver();
     
     /**
      * Enable the stepper driver
@@ -85,14 +106,15 @@ private:
     float battery_voltage;
     uint8_t system_status;
 
+    // Motor and motion control constants - initialized from config.h but modifiable
+    float steps_per_revolution;
+    float robot_max_velocity_mm_s;
+    float robot_max_accel_mm_s2;
+    float max_rot_vel_rad_s;
+    float max_rot_accel_rad_s2;
+    float stepper_max_velocity_mm_s;
+
 public:
-    // Motor and motion control constants. All commands should be within these bounds otherwise timing may be off.
-    static constexpr float STEPS_PER_REVOLUTION = 64.0f;
-    static constexpr float ROBOT_MAX_VELOCITY_MM_S = 150.0f;
-    static constexpr float ROBOT_MAX_ACCEL_MM_S2 = 50.0f;
-    static constexpr float MAX_ROT_VEL_RAD_S = 2.0f;
-    static constexpr float MAX_ROT_ACCEL_RAD_S2 = 10.0f;
-    
     StepperDriver left_wheel;
     StepperDriver right_wheel;
     
@@ -142,6 +164,22 @@ public:
      */
     void setBatteryVoltage(float voltage);
     
+    // Motion control configuration getters
+    float getStepsPerRevolution() const { return steps_per_revolution; }
+    float getRobotMaxVelocity() const { return robot_max_velocity_mm_s; }
+    float getRobotMaxAccel() const { return robot_max_accel_mm_s2; }
+    float getMaxRotVel() const { return max_rot_vel_rad_s; }
+    float getMaxRotAccel() const { return max_rot_accel_rad_s2; }
+    float getStepperMaxVelocity() const { return stepper_max_velocity_mm_s; }
+    
+    // Motion control configuration setters
+    void setStepsPerRevolution(float steps) { steps_per_revolution = steps; }
+    void setRobotMaxVelocity(float vel) { robot_max_velocity_mm_s = vel; }
+    void setRobotMaxAccel(float accel) { robot_max_accel_mm_s2 = accel; }
+    void setMaxRotVel(float vel) { max_rot_vel_rad_s = vel; }
+    void setMaxRotAccel(float accel) { max_rot_accel_rad_s2 = accel; }
+    void setStepperMaxVelocity(float vel) { stepper_max_velocity_mm_s = vel; }
+    
 private:
     MotionProfile calculateMotionProfile(float distance_mm, float max_velocity_mm_s);
     
@@ -156,7 +194,7 @@ private:
     void executeRotationMotion(float angle_rad, float steps_per_mm, float move_duration_ms);
     
     void executeStraightMotion(float distance, float steps_per_mm, float max_velocity,
-                               TickType_t start_tick, TickType_t end_tick);
+                               TickType_t start_tick, TickType_t end_tick, bool move_backward = false);
     
     void executeArcMotion(float dx, float dy, float linear_distance, float orientation_delta,
                           float steps_per_mm, float max_velocity, TickType_t start_tick, TickType_t end_tick);

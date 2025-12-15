@@ -6,11 +6,12 @@
 // StepperDriver Implementation
 // ============================================================================
 
-bool StepperDriver::initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_t reset) {
+bool StepperDriver::initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_t reset, bool reverse) {
     step_pin = step;
     dir_pin = dir;
     enable_pin = enable;
     reset_pin = reset;
+    reverse_motor = reverse;
     enabled = false;
     current_step_count = 0;
     target_step_count = 0;
@@ -21,29 +22,50 @@ bool StepperDriver::initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_
     pinMode(enable_pin, OUTPUT);
     pinMode(reset_pin, OUTPUT);
     
-    // Set initial states
+    digitalWrite(enable_pin, LOW);
+    digitalWrite(reset_pin, LOW);
     digitalWrite(step_pin, LOW);
     digitalWrite(dir_pin, LOW);
-    digitalWrite(enable_pin, HIGH);  // Disabled by default
+
+    return true;
+}
+
+bool StepperDriver::setMicrostepping(bool step_lvl, bool dir_lvl) {
+    // MS1 hardwired low, MS2 hardwired high
+    // step 0 dir 0 = 1/32
+    // step 0 dir 1 = 1/4
+    // step 1 dir 0 = 1/256
+    // step 1 dir 1 = 1/64
+    digitalWrite(step_pin, step_lvl);
+    digitalWrite(dir_pin, dir_lvl);
+    return true;
+}
+
+bool StepperDriver::resetDriver() {
+    disable();
+    digitalWrite(reset_pin, LOW);
+    delay(5);
     digitalWrite(reset_pin, HIGH);
-    
+    delay(5);
     return true;
 }
 
 bool StepperDriver::enable() {
-    digitalWrite(enable_pin, LOW);  // Active low
+    digitalWrite(enable_pin, HIGH);
     enabled = true;
     return true;
 }
 
 bool StepperDriver::disable() {
-    digitalWrite(enable_pin, HIGH);  // Active low
+    digitalWrite(enable_pin, LOW);
     enabled = false;
     return true;
 }
 
 bool StepperDriver::setDirection(bool direction) {
-    digitalWrite(dir_pin, direction ? HIGH : LOW);
+    // Apply reversal if configured
+    bool actual_direction = reverse_motor ? !direction : direction;
+    digitalWrite(dir_pin, actual_direction);
     return true;
 }
 
@@ -53,6 +75,7 @@ bool StepperDriver::step() {
     }
     
     // Generate step pulse (pulse high then low)
+    // STSPIN220 requires >100ns high pulse
     digitalWrite(step_pin, HIGH);
     delayMicroseconds(1);
     digitalWrite(step_pin, LOW);
@@ -70,17 +93,36 @@ bool Robot::initialize() {
     // Initialize stepper drivers with default pinout for ESP32-C3
     // Left wheel: step=6, dir=7, enable=8, reset=9
     // Right wheel: step=10, dir=11, enable=12, reset=13
-    if (!left_wheel.initialize(L_WHEEL_STEP_PIN, L_WHEEL_DIR_PIN, STEPPER_EN_PIN, STEPPER_RST_PIN)) {
+    if (!left_wheel.initialize(L_WHEEL_STEP_PIN, L_WHEEL_DIR_PIN, STEPPER_EN_PIN, STEPPER_RST_PIN, L_WHEEL_REVERSE)) {
         return false;
     }
     
-    if (!right_wheel.initialize(R_WHEEL_STEP_PIN, R_WHEEL_DIR_PIN, STEPPER_EN_PIN, STEPPER_RST_PIN)) {
+    if (!right_wheel.initialize(R_WHEEL_STEP_PIN, R_WHEEL_DIR_PIN, STEPPER_EN_PIN, STEPPER_RST_PIN, R_WHEEL_REVERSE)) {
         return false;
     }
+
+    // Set microstepping to 1/4 for both drivers
+    // left_wheel.setMicrostepping(false, true);
+    // right_wheel.setMicrostepping(false, true);
+
+    // Set microstepping to 1/8 for both drivers
+    left_wheel.setMicrostepping(true, false);
+    right_wheel.setMicrostepping(true, false);
+
+    // Reset drivers to apply microstepping. Only need to do on one since reset and enable are shared.
+    left_wheel.resetDriver();
     
-    // Set default robot configuration
-    wheel_radius_mm = 6.25f;
-    wheel_spacing_mm = 23.3f;
+    // Set default robot configuration from config.h
+    wheel_radius_mm = WHEEL_RADIUS_MM;
+    wheel_spacing_mm = WHEEL_SPACING_MM;
+    
+    // Initialize motion control constants from config.h
+    steps_per_revolution = STEPS_PER_REVOLUTION;
+    robot_max_velocity_mm_s = ROBOT_MAX_VELOCITY_MM_S;
+    robot_max_accel_mm_s2 = ROBOT_MAX_ACCEL_MM_S2;
+    max_rot_vel_rad_s = MAX_ROT_VEL_RAD_S;
+    max_rot_accel_rad_s2 = MAX_ROT_ACCEL_RAD_S2;
+    stepper_max_velocity_mm_s = STEPPER_MAX_VELOCITY_MM_S;
     
     // Initialize position and state
     positionX = 0.0f;
@@ -115,8 +157,8 @@ void Robot::setPosition(float x, float y, float orientation) {
 // ============================================================================
 
 Robot::MotionProfile Robot::calculateMotionProfile(float distance_mm, float max_velocity_mm_s) {
-    float accel_time_s = max_velocity_mm_s / ROBOT_MAX_ACCEL_MM_S2;
-    float accel_distance_mm = 0.5f * ROBOT_MAX_ACCEL_MM_S2 * accel_time_s * accel_time_s;
+    float accel_time_s = max_velocity_mm_s / robot_max_accel_mm_s2;
+    float accel_distance_mm = 0.5f * robot_max_accel_mm_s2 * accel_time_s * accel_time_s;
     bool full_profile = (distance_mm >= 2.0f * accel_distance_mm);
     
     return {accel_time_s, accel_time_s * 1000.0f, full_profile};
@@ -127,9 +169,9 @@ float Robot::calculateVelocityAtTime(float elapsed_ms, float remaining_ms, float
     if (!full_profile) return max_velocity_mm_s;
     
     if (elapsed_ms < accel_phase_ms) {
-        return ROBOT_MAX_ACCEL_MM_S2 * (elapsed_ms / 1000.0f);
+        return robot_max_accel_mm_s2 * (elapsed_ms / 1000.0f);
     } else if (remaining_ms < accel_phase_ms) {
-        return ROBOT_MAX_ACCEL_MM_S2 * (remaining_ms / 1000.0f);
+        return robot_max_accel_mm_s2 * (remaining_ms / 1000.0f);
     }
     return max_velocity_mm_s;
 }
@@ -138,10 +180,18 @@ void Robot::executeMotionLoop(int32_t total_steps, float base_step_time_us,
                                float max_velocity_mm_s, const MotionProfile& profile,
                                TickType_t start_tick, TickType_t target_end_tick,
                                std::function<void(int32_t)> step_callback) {
+    Serial.printf("    executeMotionLoop: total_steps=%ld, base_step_time=%.2f us, max_vel=%.2f mm/s\n", 
+                  total_steps, base_step_time_us, max_velocity_mm_s);
+    Serial.printf("    Profile: accel_phase=%.2f ms, full_profile=%s\n", 
+                  profile.accel_phase_ms, profile.full_profile ? "YES" : "NO");
+    
     TickType_t current_tick;
     float elapsed_ms, remaining_ms, current_velocity_mm_s;
     uint32_t step_delay_us;
     TickType_t step_delay_ticks;
+    
+    // Print velocity at key steps
+    int32_t print_interval = (total_steps > 100) ? (total_steps / 10) : 1;
     
     for (int32_t step_index = 0; step_index < total_steps; step_index++) {
         current_tick = xTaskGetTickCount();
@@ -153,6 +203,12 @@ void Robot::executeMotionLoop(int32_t total_steps, float base_step_time_us,
         
         step_delay_us = (uint32_t)fmax(1.0f, base_step_time_us * max_velocity_mm_s / current_velocity_mm_s);
         step_delay_ticks = pdMS_TO_TICKS(fmax(1, (uint32_t)(step_delay_us / 1000)));
+        
+        // Periodic debug output
+        if (step_index % print_interval == 0 || step_index == total_steps - 1) {
+            Serial.printf("      Step %ld/%ld: vel=%.2f mm/s, delay=%lu us (elapsed=%.1f ms, remaining=%.1f ms)\n",
+                          step_index, total_steps, current_velocity_mm_s, step_delay_us, elapsed_ms, remaining_ms);
+        }
         
         step_callback(step_index);
         
@@ -174,12 +230,20 @@ void Robot::setTargetPose(MotionCommand target) {
     float target_theta = target.target_orientation_rad;
     float move_duration_ms = target.move_duration_ms;
 
-    Serial.printf("Robot::set target to %f, %f, %f over %f ms\n", target_x, target_y, target_theta, move_duration_ms);
+    Serial.printf("\n========================================\n");
+    Serial.printf("Robot::setTargetPose CALLED\n");
+    Serial.printf("  Target: (%.2f, %.2f, %.4f rad) over %.2f ms\n", target_x, target_y, target_theta, move_duration_ms);
+
+    // Enable motors and give time for them to settle
+    left_wheel.enable();
+    right_wheel.enable();
     
     // Extract current position
     float current_x = positionX;
     float current_y = positionY;
     float current_theta = orientation;
+    
+    Serial.printf("  Current: (%.2f, %.2f, %.4f rad)\n", current_x, current_y, current_theta);
     
     // Calculate deltas
     float dx = target_x - current_x;
@@ -190,14 +254,19 @@ void Robot::setTargetPose(MotionCommand target) {
     while (orientation_delta > M_PI) orientation_delta -= 2.0f*M_PI;
     while (orientation_delta < -M_PI) orientation_delta += 2.0f*M_PI;
     
-    Serial.printf("  Distance: %.2f mm, Orientation delta: %.4f rad\n", linear_distance, orientation_delta);
+    Serial.printf("  Delta: dx=%.2f mm, dy=%.2f mm\n", dx, dy);
+    Serial.printf("  Linear distance: %.2f mm\n", linear_distance);
+    Serial.printf("  Orientation delta: %.4f rad (%.2f deg)\n", orientation_delta, orientation_delta * 180.0f / M_PI);
     
     // Calculate motion parameters (common to all move types)
     const float POSITION_TOLERANCE = 5.0f;
-    const float STEPS_PER_MM = STEPS_PER_REVOLUTION / (2.0f * M_PI * wheel_radius_mm);
+    const float STEPS_PER_MM = steps_per_revolution / (2.0f * M_PI * wheel_radius_mm);
+    
+    Serial.printf("  Steps per mm: %.4f\n", STEPS_PER_MM);
+    Serial.printf("  Wheel radius: %.2f mm, spacing: %.2f mm\n", wheel_radius_mm, wheel_spacing_mm);
     
     float max_velocity = (move_duration_ms > 0) 
-        ? fmin((linear_distance / (move_duration_ms / 1000.0f)) * 1.5f, ROBOT_MAX_VELOCITY_MM_S)
+        ? fmin((linear_distance / (move_duration_ms / 1000.0f)) * 1.5f, robot_max_velocity_mm_s)
         : 100.0f;
     
     Serial.printf("  Max velocity: %.2f mm/s\n", max_velocity);
@@ -209,25 +278,89 @@ void Robot::setTargetPose(MotionCommand target) {
     bool is_rotation_only = (linear_distance < POSITION_TOLERANCE);
     bool is_straightline = (fabs(orientation_delta) < 0.01f);
     
+    Serial.printf("  Motion classification:\n");
+    Serial.printf("    Rotation only: %s (distance < %.2f mm)\n", is_rotation_only ? "YES" : "NO", POSITION_TOLERANCE);
+    Serial.printf("    Straight line: %s (|orientation_delta| < 0.01 rad)\n", is_straightline ? "YES" : "NO");
+    Serial.printf("    Arc motion: %s\n", (!is_rotation_only && !is_straightline) ? "YES" : "NO");
+    
     uint32_t move_starttime = millis();
     if (is_rotation_only) {
         executeRotationMotion(orientation_delta, STEPS_PER_MM, move_duration_ms);
     } else if (is_straightline) {
-        executeStraightMotion(linear_distance, STEPS_PER_MM, max_velocity, start_tick, end_tick);
+        // For straight line motion, check if we need to rotate first to face the target
+        // Calculate the required heading to reach the target
+        float required_heading = atan2(dy, dx);
+        float heading_error = required_heading - current_theta;
+        
+        // Normalize heading error to [-pi, pi]
+        while (heading_error > M_PI) heading_error -= 2.0f*M_PI;
+        while (heading_error < -M_PI) heading_error += 2.0f*M_PI;
+        
+        Serial.printf("  Straight line alignment check:\n");
+        Serial.printf("    Required heading: %.4f rad (%.2f deg)\n", required_heading, required_heading * 180.0f / M_PI);
+        Serial.printf("    Current heading: %.4f rad (%.2f deg)\n", current_theta, current_theta * 180.0f / M_PI);
+        Serial.printf("    Heading error: %.4f rad (%.2f deg)\n", heading_error, heading_error * 180.0f / M_PI);
+        
+        const float HEADING_TOLERANCE = 0.1f;  // ~5.7 degrees tolerance
+        
+        // Check if we can move backward (heading error ~180 deg) which might be shorter
+        float forward_rotation = heading_error;
+        float backward_rotation = heading_error + ((heading_error > 0) ? -M_PI : M_PI);
+        
+        // Normalize backward rotation
+        while (backward_rotation > M_PI) backward_rotation -= 2.0f*M_PI;
+        while (backward_rotation < -M_PI) backward_rotation += 2.0f*M_PI;
+        
+        Serial.printf("    Forward rotation needed: %.4f rad (%.2f deg)\n", forward_rotation, forward_rotation * 180.0f / M_PI);
+        Serial.printf("    Backward rotation needed: %.4f rad (%.2f deg)\n", backward_rotation, backward_rotation * 180.0f / M_PI);
+        
+        bool move_backward = false;
+        float rotation_needed = forward_rotation;
+        
+        // Choose the shorter rotation (forward or backward)
+        if (fabs(backward_rotation) < fabs(forward_rotation)) {
+            rotation_needed = backward_rotation;
+            move_backward = true;
+            Serial.printf("    -> Choosing BACKWARD motion (shorter rotation)\n");
+        } else {
+            Serial.printf("    -> Choosing FORWARD motion\n");
+        }
+        
+        // If rotation needed exceeds tolerance, rotate first
+        if (fabs(rotation_needed) > HEADING_TOLERANCE) {
+            Serial.printf("  Executing pre-rotation: %.4f rad (%.2f deg)\n", rotation_needed, rotation_needed * 180.0f / M_PI);
+            executeRotationMotion(rotation_needed, STEPS_PER_MM, 0);  // No time constraint for alignment
+            
+            // Update robot's stored orientation after rotation
+            orientation = current_theta + rotation_needed;
+            while (orientation > M_PI) orientation -= 2.0f*M_PI;
+            while (orientation < -M_PI) orientation += 2.0f*M_PI;
+            
+            Serial.printf("  Orientation after pre-rotation: %.4f rad\n", orientation);
+        } else {
+            Serial.printf("  No pre-rotation needed (within %.2f rad tolerance)\n", HEADING_TOLERANCE);
+        }
+        
+        // Execute straight line motion (forward or backward)
+        executeStraightMotion(linear_distance, STEPS_PER_MM, max_velocity, start_tick, end_tick, move_backward);
     } else {
         executeArcMotion(dx, dy, linear_distance, orientation_delta, STEPS_PER_MM, max_velocity, start_tick, end_tick);
     }
 
-    Serial.printf("  Move time: %lu ms\n", millis() - move_starttime);
+    uint32_t actual_move_time = millis() - move_starttime;
+    Serial.printf("  Actual move time: %lu ms (commanded: %.2f ms)\n", actual_move_time, move_duration_ms);
     
     // Update final position
     positionX = target_x;
     positionY = target_y;
     orientation = target_theta;
     
+    Serial.printf("  Updated position to: (%.2f, %.2f, %.4f rad)\n", positionX, positionY, orientation);
+    
     left_wheel.disable();
     right_wheel.disable();
     Serial.printf("Robot::Move complete\n");
+    Serial.printf("========================================\n\n");
 }
 
 void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float move_duration_ms) {
@@ -237,9 +370,6 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
     int32_t num_steps = (int32_t)round(wheel_arc * steps_per_mm);
     Serial.printf("    Angle: %.4f rad, Steps: %ld\n", angle_rad, num_steps);
     
-    left_wheel.enable();
-    right_wheel.enable();
-    
     // Set rotation direction
     bool cw = (angle_rad > 0);
     left_wheel.setDirection(!cw);
@@ -247,7 +377,7 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
     
     // Calculate required angular velocity accounting for acceleration time
     // Try to fit the motion within move_duration_ms, accounting for accel/decel phases
-    float max_rot_vel_rad_s = MAX_ROT_VEL_RAD_S;
+    float target_rot_vel_rad_s = this->max_rot_vel_rad_s;
     float move_duration_s = move_duration_ms / 1000.0f;
     
     if (move_duration_ms > 0) {
@@ -256,9 +386,9 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
         float required_vel = fabs(angle_rad) / move_duration_s;
         
         for (int attempts = 0; attempts < 5; attempts++) {
-            float test_vel = fmin(required_vel, MAX_ROT_VEL_RAD_S);
-            float accel_time = test_vel / MAX_ROT_ACCEL_RAD_S2;
-            float accel_angle = 0.5f * MAX_ROT_ACCEL_RAD_S2 * accel_time * accel_time;
+            float test_vel = fmin(required_vel, this->max_rot_vel_rad_s);
+            float accel_time = test_vel / max_rot_accel_rad_s2;
+            float accel_angle = 0.5f * max_rot_accel_rad_s2 * accel_time * accel_time;
             
             float actual_time;
             if (fabs(angle_rad) >= 2.0f * accel_angle) {
@@ -267,11 +397,11 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
                 actual_time = 2.0f * accel_time + (cruise_angle / test_vel);
             } else {
                 // Triangular profile
-                actual_time = 2.0f * sqrt(fabs(angle_rad) / MAX_ROT_ACCEL_RAD_S2);
+                actual_time = 2.0f * sqrt(fabs(angle_rad) / max_rot_accel_rad_s2);
             }
             
             if (actual_time <= move_duration_s) {
-                max_rot_vel_rad_s = test_vel;
+                target_rot_vel_rad_s = test_vel;
                 break;
             }
             // Reduce velocity and try again
@@ -279,11 +409,11 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
         }
     }
     
-    Serial.printf("    Commanded duration: %.2f ms, Max velocity: %.4f rad/s\n", move_duration_ms, max_rot_vel_rad_s);
+    Serial.printf("    Commanded duration: %.2f ms, Max velocity: %.4f rad/s\n", move_duration_ms, target_rot_vel_rad_s);
     
     // Calculate rotational acceleration profile with the determined velocity
-    float accel_time_s = max_rot_vel_rad_s / MAX_ROT_ACCEL_RAD_S2;
-    float accel_angle_rad = 0.5f * MAX_ROT_ACCEL_RAD_S2 * accel_time_s * accel_time_s;
+    float accel_time_s = target_rot_vel_rad_s / max_rot_accel_rad_s2;
+    float accel_angle_rad = 0.5f * max_rot_accel_rad_s2 * accel_time_s * accel_time_s;
     bool full_profile = (fabs(angle_rad) >= 2.0f * accel_angle_rad);
     float accel_phase_s = accel_time_s;
     
@@ -292,18 +422,18 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
     if (full_profile) {
         // Time = accel + cruise + decel
         float cruise_angle = fabs(angle_rad) - 2.0f * accel_angle_rad;
-        float cruise_time = cruise_angle / max_rot_vel_rad_s;
+        float cruise_time = cruise_angle / target_rot_vel_rad_s;
         total_rotation_time_s = 2.0f * accel_time_s + cruise_time;
     } else {
         // Triangular profile: t_total = 2*sqrt(distance / accel)
-        total_rotation_time_s = 2.0f * sqrt(fabs(angle_rad) / MAX_ROT_ACCEL_RAD_S2);
+        total_rotation_time_s = 2.0f * sqrt(fabs(angle_rad) / max_rot_accel_rad_s2);
     }
     
     Serial.printf("    Accel phase: %.2f s, Full profile: %s, Total time: %.2f s\n", accel_phase_s, full_profile ? "YES" : "NO", total_rotation_time_s);
     
     // Base timing at max velocity
-    float rotation_linear_vel = max_rot_vel_rad_s * (wheel_spacing_mm / 2.0f);
-    float base_step_time_us = (2.0f * M_PI * wheel_radius_mm / STEPS_PER_REVOLUTION) / rotation_linear_vel * 1000000.0f;
+    float rotation_linear_vel = target_rot_vel_rad_s * (wheel_spacing_mm / 2.0f);
+    float base_step_time_us = (2.0f * M_PI * wheel_radius_mm / steps_per_revolution) / rotation_linear_vel * 1000000.0f;
     
     TickType_t start_tick = xTaskGetTickCount();
     TickType_t end_tick = start_tick + pdMS_TO_TICKS((uint32_t)(total_rotation_time_s * 1000.0f));
@@ -319,15 +449,15 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
         elapsed_s = (float)(current_tick - start_tick) * portTICK_PERIOD_MS / 1000.0f;
         remaining_s = (float)(end_tick - current_tick) * portTICK_PERIOD_MS / 1000.0f;
         
-        current_rot_vel_rad_s = max_rot_vel_rad_s;
+        current_rot_vel_rad_s = target_rot_vel_rad_s;
         
         if (full_profile) {
             if (elapsed_s < accel_phase_s) {
                 // Acceleration phase: ramp from min to max velocity
-                current_rot_vel_rad_s = fmax(MIN_ROT_VEL, MAX_ROT_ACCEL_RAD_S2 * elapsed_s);
+                current_rot_vel_rad_s = fmax(MIN_ROT_VEL, max_rot_accel_rad_s2 * elapsed_s);
             } else if (remaining_s < accel_phase_s) {
                 // Deceleration phase: ramp from max to min velocity
-                current_rot_vel_rad_s = fmax(MIN_ROT_VEL, MAX_ROT_ACCEL_RAD_S2 * remaining_s);
+                current_rot_vel_rad_s = fmax(MIN_ROT_VEL, max_rot_accel_rad_s2 * remaining_s);
             }
         }
         
@@ -351,38 +481,48 @@ void Robot::executeRotationMotion(float angle_rad, float steps_per_mm, float mov
 }
 
 void Robot::executeStraightMotion(float distance, float steps_per_mm, float max_velocity,
-                                   TickType_t start_tick, TickType_t end_tick) {
+                                   TickType_t start_tick, TickType_t end_tick, bool move_backward) {
     Serial.println("  Motion type: STRAIGHT_LINE");
+    Serial.printf("    Direction: %s\n", move_backward ? "BACKWARD" : "FORWARD");
     
     int32_t num_steps = (int32_t)round(distance * steps_per_mm);
     Serial.printf("    Distance: %.2f mm, Steps: %ld\n", distance, num_steps);
+    Serial.printf("    Steps per mm: %.4f\n", steps_per_mm);
+    Serial.printf("    Max velocity: %.2f mm/s\n", max_velocity);
     
-    left_wheel.enable();
-    right_wheel.enable();
-    left_wheel.setDirection(true);
-    right_wheel.setDirection(true);
+    // Set direction based on move_backward flag
+    left_wheel.setDirection(!move_backward);
+    right_wheel.setDirection(!move_backward);
+    Serial.printf("    Direction set: %s (both motors)\n", move_backward ? "REVERSE" : "FORWARD");
     
     MotionProfile profile = calculateMotionProfile(distance, max_velocity);
+    Serial.printf("    Motion profile calculated: accel_time=%.4f s, accel_phase=%.2f ms, full=%s\n",
+                  profile.accel_time_s, profile.accel_phase_ms, profile.full_profile ? "YES" : "NO");
     
     // Calculate actual motion time based on profile
     float total_motion_time_s;
     if (profile.full_profile) {
         // Time = accel + cruise + decel
-        float accel_distance = 0.5f * ROBOT_MAX_ACCEL_MM_S2 * profile.accel_time_s * profile.accel_time_s;
+        float accel_distance = 0.5f * robot_max_accel_mm_s2 * profile.accel_time_s * profile.accel_time_s;
         float cruise_distance = distance - 2.0f * accel_distance;
         float cruise_time = cruise_distance / max_velocity;
         total_motion_time_s = 2.0f * profile.accel_time_s + cruise_time;
+        Serial.printf("    Full profile: accel_dist=%.2f mm, cruise_dist=%.2f mm, cruise_time=%.4f s\n",
+                      accel_distance, cruise_distance, cruise_time);
     } else {
         // Triangular profile: t_total = 2*sqrt(distance / accel)
-        total_motion_time_s = 2.0f * sqrt(distance / ROBOT_MAX_ACCEL_MM_S2);
+        total_motion_time_s = 2.0f * sqrt(distance / robot_max_accel_mm_s2);
+        Serial.printf("    Triangular profile (no cruise phase)\n");
     }
     
     // Override end_tick with corrected time
     end_tick = start_tick + pdMS_TO_TICKS((uint32_t)(total_motion_time_s * 1000.0f));
     
-    Serial.printf("    Accel phase: %.2f ms, Full profile: %s, Total time: %.2f s\n", profile.accel_phase_ms, profile.full_profile ? "YES" : "NO", total_motion_time_s);
+    Serial.printf("    Total motion time: %.4f s (%.2f ms)\n", total_motion_time_s, total_motion_time_s * 1000.0f);
+    Serial.printf("    Robot accel: %.2f mm/s^2\n", robot_max_accel_mm_s2);
     
-    float step_time_us = (2.0f * M_PI * wheel_radius_mm / STEPS_PER_REVOLUTION) / max_velocity * 1000000.0f;
+    float step_time_us = (2.0f * M_PI * wheel_radius_mm / steps_per_revolution) / max_velocity * 1000000.0f;
+    Serial.printf("    Base step time: %.2f us\n", step_time_us);
     
     executeMotionLoop(num_steps, step_time_us, max_velocity, profile, start_tick, end_tick,
         [this](int32_t idx) {
@@ -424,9 +564,7 @@ void Robot::executeArcMotion(float dx, float dy, float linear_distance, float or
     int32_t max_steps = (left_steps > right_steps) ? left_steps : right_steps;
     
     Serial.printf("    Arc radius: %.2f mm, Left steps: %ld, Right steps: %ld\n", arc_radius, left_steps, right_steps);
-    
-    left_wheel.enable();
-    right_wheel.enable();
+
     left_wheel.setDirection(outer_distance >= 0);
     right_wheel.setDirection(inner_distance >= 0);
     
@@ -437,13 +575,13 @@ void Robot::executeArcMotion(float dx, float dy, float linear_distance, float or
     float total_motion_time_s;
     if (profile.full_profile) {
         // For arc motion, use outer wheel distance to calculate cruise distance
-        float accel_distance = 0.5f * ROBOT_MAX_ACCEL_MM_S2 * profile.accel_time_s * profile.accel_time_s;
+        float accel_distance = 0.5f * robot_max_accel_mm_s2 * profile.accel_time_s * profile.accel_time_s;
         float cruise_distance = fabs(outer_distance) - 2.0f * accel_distance;
         float cruise_time = cruise_distance / max_velocity;
         total_motion_time_s = 2.0f * profile.accel_time_s + cruise_time;
     } else {
         // Triangular profile based on outer wheel distance
-        total_motion_time_s = 2.0f * sqrt(fabs(outer_distance) / ROBOT_MAX_ACCEL_MM_S2);
+        total_motion_time_s = 2.0f * sqrt(fabs(outer_distance) / robot_max_accel_mm_s2);
     }
     
     // Override end_tick with corrected time
@@ -497,7 +635,7 @@ void Robot::setTestState(MotTestCommand test_cmd) {
     float m1_distance_mm = fabs(m1_linear_velocity_mm_s * MOTION_DURATION_S);
     
     // Convert distance to steps
-    float steps_per_mm = STEPS_PER_REVOLUTION / (2.0f * M_PI * wheel_radius_mm);
+    float steps_per_mm = steps_per_revolution / (2.0f * M_PI * wheel_radius_mm);
     int32_t m0_steps = (int32_t)round(m0_distance_mm * steps_per_mm);
     int32_t m1_steps = (int32_t)round(m1_distance_mm * steps_per_mm);
     
@@ -506,8 +644,8 @@ void Robot::setTestState(MotTestCommand test_cmd) {
     right_wheel.setDirection(test_cmd.m1_vel >= 0);
     
     // Calculate step timing: delay_ms = 1000 / steps_per_second
-    float m0_steps_per_second = fabs(test_cmd.m0_vel) * STEPS_PER_REVOLUTION / (2.0f * M_PI);
-    float m1_steps_per_second = fabs(test_cmd.m1_vel) * STEPS_PER_REVOLUTION / (2.0f * M_PI);
+    float m0_steps_per_second = fabs(test_cmd.m0_vel) * steps_per_revolution / (2.0f * M_PI);
+    float m1_steps_per_second = fabs(test_cmd.m1_vel) * steps_per_revolution / (2.0f * M_PI);
     
     uint32_t m0_delay_ms = (m0_steps_per_second > 0) ? (uint32_t)fmax(1, 1000.0f / m0_steps_per_second) : 1000;
     uint32_t m1_delay_ms = (m1_steps_per_second > 0) ? (uint32_t)fmax(1, 1000.0f / m1_steps_per_second) : 1000;

@@ -1,6 +1,7 @@
 #ifndef __ESP_NOW_COMMUNICATOR_H__
 #define __ESP_NOW_COMMUNICATOR_H__
 
+#include "config.h"
 #include "messages_espnow.h"
 #include "motion_queue.h"
 #include "robot.h"
@@ -10,12 +11,6 @@
 #include <esp_mac.h>
 #include <esp_now.h>
 #include <functional>
-
-// TODO this ID needs to be unique per device so set on compile or something
-#define DEVICE_ID 0x22
-
-#define WIFI_CHANNEL 6
-#define WIFI_POWER WIFI_POWER_11dBm
 
 // Callback type for received broadcast messages
 typedef std::function<void(const uint8_t* mac_addr, const uint8_t* data, int len)> EspNowReceiveCallback;

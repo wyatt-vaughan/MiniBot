@@ -76,10 +76,10 @@ def board_coords_to_world(col: int, row: int) -> Tuple[float, float]:
 # Enums and Data Classes
 # ============================================================================
 
-class MoveType(Enum):
+class CommandType(Enum):
     ROTATE = "rotate"
-    STRAIGHT = "straight"
-    ARC = "arc"
+    MOVE_STRAIGHT = "move_straight"
+    WAIT = "wait"
 
 @dataclass
 class Position:
@@ -106,27 +106,80 @@ class Piece:
         return self.position.distance_to(other.position)
 
 @dataclass
-class MoveCommand:
-    """A movement command for a piece"""
-    piece_id: str
-    move_type: MoveType
-    parameters: Dict  # Type-specific params (angle, distance, arc_radius, etc)
-    
+class PieceCommand:
+    """A single command for a piece to execute"""
+    command_type: CommandType
+    duration: float  # seconds
+    # Parameters based on command type:
+    # ROTATE: target_orientation (degrees)
+    # MOVE_STRAIGHT: distance (mm), direction (degrees - current orientation)
+    # WAIT: no additional params
+    target_orientation: Optional[float] = None  # For ROTATE
+    distance: Optional[float] = None  # For MOVE_STRAIGHT
+    start_time: float = 0.0  # When this command starts in the sequence
+
 @dataclass
-class MovePath:
-    """A planned movement path for a piece"""
+class PieceCommandSequence:
+    """Sequence of commands for a single piece"""
     piece_id: str
-    waypoints: List[Position] = field(default_factory=list)
-    duration: float = 0.0  # estimated time in seconds
+    commands: List[PieceCommand] = field(default_factory=list)
+    total_duration: float = 0.0
+    start_time: float = 0.0  # When this sequence starts (for queuing multiple sequences)
+    
+    def add_command(self, command: PieceCommand):
+        """Add a command to the sequence"""
+        command.start_time = self.total_duration
+        self.commands.append(command)
+        self.total_duration += command.duration
+
+@dataclass
+class ExecutionPlan:
+    """Complete execution plan for all pieces"""
+    sequences: Dict[str, List[PieceCommandSequence]] = field(default_factory=dict)  # piece_id -> list of sequences
+    
+    def get_total_duration(self) -> float:
+        """Get the maximum duration across all piece sequences"""
+        if not self.sequences:
+            return 0.0
+        max_time = 0.0
+        for seq_list in self.sequences.values():
+            for seq in seq_list:
+                end_time = seq.start_time + seq.total_duration
+                max_time = max(max_time, end_time)
+        return max_time
+    
+    def add_sequence(self, sequence: PieceCommandSequence):
+        """Add a piece command sequence to the plan"""
+        if sequence.piece_id not in self.sequences:
+            self.sequences[sequence.piece_id] = []
+            sequence.start_time = 0.0
+        else:
+            # Queue this sequence after the last one for this piece
+            last_seq = self.sequences[sequence.piece_id][-1]
+            sequence.start_time = last_seq.start_time + last_seq.total_duration
+        
+        self.sequences[sequence.piece_id].append(sequence)
+    
+    def add_sequence_at_time(self, sequence: PieceCommandSequence, start_time: float):
+        """Add a sequence that starts at a specific time (for parallel movements)"""
+        if sequence.piece_id not in self.sequences:
+            self.sequences[sequence.piece_id] = []
+        
+        sequence.start_time = start_time
+        self.sequences[sequence.piece_id].append(sequence)
+        # Sort sequences by start time
+        self.sequences[sequence.piece_id].sort(key=lambda s: s.start_time)
 
 @dataclass
 class SimulatorState:
     """State of the simulator"""
     pieces: Dict[str, Piece]
-    paths: Dict[str, MovePath] = field(default_factory=dict)
+    execution_plan: Optional[ExecutionPlan] = None
     executing: bool = False
-    current_piece_executing: Optional[str] = None
     execution_start_time: float = 0.0
+    # Track current sequence and command index for each piece
+    executing_pieces: Dict[str, Tuple[int, int]] = field(default_factory=dict)  # piece_id -> (sequence_index, command_index)
+
 
 # ============================================================================
 # Path Planning Interface
@@ -137,7 +190,7 @@ class PathPlanner(ABC):
     
     @abstractmethod
     def plan_movements(self, pieces: Dict[str, Piece], 
-                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
+                       target_positions: Dict[str, Position]) -> ExecutionPlan:
         """
         Plan movements for all pieces to reach target positions
         
@@ -146,7 +199,7 @@ class PathPlanner(ABC):
             target_positions: Target positions for each piece
             
         Returns:
-            Dictionary mapping piece_id to MovePath
+            ExecutionPlan containing command sequences for all pieces
         """
         pass
     
@@ -154,12 +207,764 @@ class PathPlanner(ABC):
     def get_name(self) -> str:
         """Get the name of this planner"""
         pass
+    
+    def _create_rotate_command(self, current_orientation: float, target_orientation: float) -> PieceCommand:
+        """Helper to create a rotation command"""
+        # Normalize angles
+        current = current_orientation % 360
+        target = target_orientation % 360
+        
+        # Calculate shortest rotation
+        angle_diff = (target - current) % 360
+        if angle_diff > 180:
+            angle_diff -= 360
+        
+        duration = abs(angle_diff) / ANGULAR_VELOCITY
+        return PieceCommand(
+            command_type=CommandType.ROTATE,
+            duration=duration,
+            target_orientation=target
+        )
+    
+    def _create_move_command(self, distance: float) -> PieceCommand:
+        """Helper to create a straight movement command"""
+        duration = distance / LINEAR_VELOCITY
+        return PieceCommand(
+            command_type=CommandType.MOVE_STRAIGHT,
+            duration=duration,
+            distance=distance
+        )
+    
+    def _create_wait_command(self, wait_time: float) -> PieceCommand:
+        """Helper to create a wait/dwell command"""
+        return PieceCommand(
+            command_type=CommandType.WAIT,
+            duration=wait_time
+        )
+
+class AI_Planner(PathPlanner):
+    """Iterative planner that tries multiple random orderings to find optimal collision-free paths"""
+    
+    def plan_movements(self, pieces: Dict[str, Piece], 
+                       target_positions: Dict[str, Position]) -> ExecutionPlan:
+        """
+        Plan movements using iterative optimization with random priority.
+        Pieces move one at a time, avoiding collisions with all other pieces.
+        """
+        best_plan = None
+        best_score = float('inf')
+        best_time = float('inf')
+        
+        # Try 100 different random orderings
+        for attempt in range(20):
+            plan = ExecutionPlan()
+            
+            # Track simulated positions for collision checking
+            simulated_positions = {pid: piece.position.copy() for pid, piece in pieces.items()}
+            
+            # Optimize target assignments for identical pieces (with random strategy)
+            optimize_chance = random.random()
+            if optimize_chance < 0.7:  # 70% use optimization
+                optimized_targets = self._optimize_target_assignments(pieces, target_positions, simulated_positions)
+            elif optimize_chance < 0.85:  # 15% use partial random swaps
+                optimized_targets = self._random_swap_targets(pieces, target_positions, simulated_positions)
+            else:  # 15% use original assignments
+                optimized_targets = target_positions.copy()
+            
+            # Calculate distances to target for prioritization
+            distances = {}
+            for piece_id in pieces.keys():
+                if piece_id in optimized_targets:
+                    dist = simulated_positions[piece_id].distance_to(optimized_targets[piece_id])
+                    distances[piece_id] = dist
+            
+            remaining_pieces = set(distances.keys())
+            current_time = 0.0
+            max_iterations = 50  # Prevent infinite loops
+            
+            for iteration in range(max_iterations):
+                if not remaining_pieces:
+                    break
+                
+                # Calculate priority: distance + random + back rank bonus
+                priorities = []
+                for piece_id in remaining_pieces:
+                    dist = simulated_positions[piece_id].distance_to(target_positions[piece_id])
+                    
+                    # Skip if already at target
+                    if dist < 1.0:
+                        continue
+                    
+                    # Back rank pieces (row 0 or 7) get priority
+                    target_col, target_row = None, None
+                    for pid, (col, row) in PIECE_START_POSITIONS.items():
+                        if pid == piece_id:
+                            target_col, target_row = col, row
+                            break
+                    
+                    back_rank_bonus = 100.0 if target_row in [0, 7] else 0.0
+                    # Vary the random factor and weighting per attempt
+                    random_factor = random.uniform(0, 100)
+                    distance_weight = random.uniform(0.5, 2.0)  # Vary importance of distance
+                    priority = dist * distance_weight + back_rank_bonus + random_factor
+                    
+                    priorities.append((priority, piece_id))
+                
+                if not priorities:
+                    break
+                
+                # Sort by priority (highest first)
+                priorities.sort(reverse=True)
+                
+                # Try to move each piece in priority order
+                moved_any = False
+                for _, piece_id in priorities:
+                    target_pos = optimized_targets[piece_id]
+                    current_pos = simulated_positions[piece_id]
+                    
+                    # Check if already at target
+                    if current_pos.distance_to(target_pos) < 1.0:
+                        remaining_pieces.discard(piece_id)
+                        continue
+                    
+                    # Try to find a collision-free path
+                    sequence = self._plan_piece_movement(
+                        piece_id, current_pos, target_pos, simulated_positions,
+                        plan, current_time, optimized_targets, remaining_pieces
+                    )
+                    
+                    if sequence and len(sequence.commands) > 0:
+                        # Add sequence to plan at current time
+                        plan.add_sequence_at_time(sequence, current_time)
+                        current_time += sequence.total_duration
+                        
+                        # Update simulated position
+                        self._update_simulated_position(simulated_positions[piece_id], sequence)
+                        
+                        # Check if reached target
+                        if simulated_positions[piece_id].distance_to(target_pos) < 1.0:
+                            remaining_pieces.discard(piece_id)
+                        
+                        moved_any = True
+                        break  # Move to next iteration
+                
+                if not moved_any:
+                    # No piece could move, try moving pieces out of the way
+                    moved_blocking = self._try_move_blocking_pieces(
+                        plan, simulated_positions, optimized_targets, 
+                        remaining_pieces, current_time
+                    )
+                    
+                    if moved_blocking:
+                        # Update current time and continue
+                        current_time = plan.get_total_duration()
+                    else:
+                        # Still stuck, break out
+                        break
+            
+            # Score this attempt
+            total_time = plan.get_total_duration()
+            accuracy_score = sum(
+                simulated_positions[pid].distance_to(optimized_targets[pid])
+                for pid in optimized_targets.keys()
+            )
+            
+            # Perfect accuracy = pieces at target, otherwise prefer better accuracy
+            if accuracy_score < 10.0:  # Near perfect
+                score = total_time
+            else:
+                score = accuracy_score * 1000 + total_time
+            
+            if attempt % 10 == 0:
+                print(f"  Attempt {attempt}: time={total_time:.1f}s, accuracy={accuracy_score:.1f}mm, score={score:.1f}")
+            
+            # Keep best solution
+            if score < best_score:
+                best_score = score
+                best_time = total_time
+                best_plan = plan
+        
+        print(f"Best solution: time={best_time:.1f}s, score={best_score:.1f}")
+        return best_plan if best_plan else ExecutionPlan()
+    
+    def _optimize_target_assignments(self, pieces: Dict[str, Piece], 
+                                     target_positions: Dict[str, Position],
+                                     simulated_positions: Dict[str, Position]) -> Dict[str, Position]:
+        """Optimize target assignments for interchangeable pieces"""
+        optimized = target_positions.copy()
+        
+        # Group pieces by type
+        piece_groups = {
+            'white_pawns': [],
+            'black_pawns': [],
+            'white_rooks': [],
+            'black_rooks': [],
+            'white_knights': [],
+            'black_knights': [],
+            'white_bishops': [],
+            'black_bishops': [],
+        }
+        
+        target_groups = {
+            'white_pawns': [],
+            'black_pawns': [],
+            'white_rooks': [],
+            'black_rooks': [],
+            'white_knights': [],
+            'black_knights': [],
+            'white_bishops': [],
+            'black_bishops': [],
+        }
+        
+        # Classify pieces and their targets
+        for piece_id in pieces.keys():
+            if piece_id not in target_positions:
+                continue
+            
+            # White pawns: p1-p8
+            if piece_id.startswith('p') and piece_id[1:].isdigit():
+                piece_groups['white_pawns'].append(piece_id)
+                target_groups['white_pawns'].append(target_positions[piece_id])
+            # Black pawns: P1-P8
+            elif piece_id.startswith('P') and piece_id[1:].isdigit():
+                piece_groups['black_pawns'].append(piece_id)
+                target_groups['black_pawns'].append(target_positions[piece_id])
+            # White rooks: r1, r2
+            elif piece_id in ['r1', 'r2']:
+                piece_groups['white_rooks'].append(piece_id)
+                target_groups['white_rooks'].append(target_positions[piece_id])
+            # Black rooks: R1, R2
+            elif piece_id in ['R1', 'R2']:
+                piece_groups['black_rooks'].append(piece_id)
+                target_groups['black_rooks'].append(target_positions[piece_id])
+            # White knights: n1, n2
+            elif piece_id in ['n1', 'n2']:
+                piece_groups['white_knights'].append(piece_id)
+                target_groups['white_knights'].append(target_positions[piece_id])
+            # Black knights: N1, N2
+            elif piece_id in ['N1', 'N2']:
+                piece_groups['black_knights'].append(piece_id)
+                target_groups['black_knights'].append(target_positions[piece_id])
+            # White bishops: b1, b2
+            elif piece_id in ['b1', 'b2']:
+                piece_groups['white_bishops'].append(piece_id)
+                target_groups['white_bishops'].append(target_positions[piece_id])
+            # Black bishops: B1, B2
+            elif piece_id in ['B1', 'B2']:
+                piece_groups['black_bishops'].append(piece_id)
+                target_groups['black_bishops'].append(target_positions[piece_id])
+        
+        # Optimize each group
+        for group_name in piece_groups.keys():
+            piece_ids = piece_groups[group_name]
+            targets = target_groups[group_name]
+            
+            if len(piece_ids) <= 1:
+                continue
+            
+            # Find optimal assignment using greedy matching
+            assignments = self._find_optimal_assignment(piece_ids, targets, simulated_positions)
+            
+            for piece_id, target_pos in assignments.items():
+                optimized[piece_id] = target_pos
+        
+        return optimized
+    
+    def _find_optimal_assignment(self, piece_ids: List[str], targets: List[Position],
+                                simulated_positions: Dict[str, Position]) -> Dict[str, Position]:
+        """Find optimal target assignment to minimize total distance"""
+        import itertools
+        
+        if len(piece_ids) != len(targets):
+            # Shouldn't happen, but handle gracefully
+            return {pid: targets[i] for i, pid in enumerate(piece_ids)}
+        
+        best_assignment = {}
+        best_total_distance = float('inf')
+        
+        # Try all permutations to find minimum total distance
+        for target_permutation in itertools.permutations(targets):
+            total_distance = 0
+            for i, piece_id in enumerate(piece_ids):
+                distance = simulated_positions[piece_id].distance_to(target_permutation[i])
+                total_distance += distance
+            
+            if total_distance < best_total_distance:
+                best_total_distance = total_distance
+                best_assignment = {piece_ids[i]: target_permutation[i] for i in range(len(piece_ids))}
+        
+        return best_assignment
+    
+    def _random_swap_targets(self, pieces: Dict[str, Piece],
+                            target_positions: Dict[str, Position],
+                            simulated_positions: Dict[str, Position]) -> Dict[str, Position]:
+        """Randomly swap some targets for identical pieces (exploratory strategy)"""
+        optimized = target_positions.copy()
+        
+        # Get piece groups
+        piece_groups = {
+            'white_pawns': [],
+            'black_pawns': [],
+            'white_rooks': [],
+            'black_rooks': [],
+            'white_knights': [],
+            'black_knights': [],
+            'white_bishops': [],
+            'black_bishops': [],
+        }
+        
+        target_groups = {
+            'white_pawns': [],
+            'black_pawns': [],
+            'white_rooks': [],
+            'black_rooks': [],
+            'white_knights': [],
+            'black_knights': [],
+            'white_bishops': [],
+            'black_bishops': [],
+        }
+        
+        # Classify pieces
+        for piece_id in pieces.keys():
+            if piece_id not in target_positions:
+                continue
+            
+            if piece_id.startswith('p') and piece_id[1:].isdigit():
+                piece_groups['white_pawns'].append(piece_id)
+                target_groups['white_pawns'].append(target_positions[piece_id])
+            elif piece_id.startswith('P') and piece_id[1:].isdigit():
+                piece_groups['black_pawns'].append(piece_id)
+                target_groups['black_pawns'].append(target_positions[piece_id])
+            elif piece_id in ['r1', 'r2']:
+                piece_groups['white_rooks'].append(piece_id)
+                target_groups['white_rooks'].append(target_positions[piece_id])
+            elif piece_id in ['R1', 'R2']:
+                piece_groups['black_rooks'].append(piece_id)
+                target_groups['black_rooks'].append(target_positions[piece_id])
+            elif piece_id in ['n1', 'n2']:
+                piece_groups['white_knights'].append(piece_id)
+                target_groups['white_knights'].append(target_positions[piece_id])
+            elif piece_id in ['N1', 'N2']:
+                piece_groups['black_knights'].append(piece_id)
+                target_groups['black_knights'].append(target_positions[piece_id])
+            elif piece_id in ['b1', 'b2']:
+                piece_groups['white_bishops'].append(piece_id)
+                target_groups['white_bishops'].append(target_positions[piece_id])
+            elif piece_id in ['B1', 'B2']:
+                piece_groups['black_bishops'].append(piece_id)
+                target_groups['black_bishops'].append(target_positions[piece_id])
+        
+        # Randomly shuffle targets within each group
+        for group_name in piece_groups.keys():
+            piece_ids = piece_groups[group_name]
+            targets = target_groups[group_name]
+            
+            if len(piece_ids) <= 1:
+                continue
+            
+            # Shuffle targets
+            shuffled_targets = targets.copy()
+            random.shuffle(shuffled_targets)
+            
+            for i, piece_id in enumerate(piece_ids):
+                optimized[piece_id] = shuffled_targets[i]
+        
+        return optimized
+    
+    def _plan_piece_movement(self, piece_id: str, current_pos: Position, 
+                            target_pos: Position, 
+                            simulated_positions: Dict[str, Position],
+                            plan: ExecutionPlan,
+                            current_time: float,
+                            target_positions: Dict[str, Position],
+                            remaining_pieces: set) -> Optional[PieceCommandSequence]:
+        """Plan movement for a single piece, checking for collisions"""
+        
+        # Randomly choose strategy order (50% try direct first, 50% try route-around first)
+        try_route_first = random.random() < 0.3
+        
+        if not try_route_first:
+            # Try direct path first
+            sequence = self._try_direct_path(piece_id, current_pos, target_pos, simulated_positions)
+            if sequence:
+                return sequence
+        else:
+            # Try routing around first (more exploratory)
+            sequence = self._try_route_around(piece_id, current_pos, target_pos, simulated_positions)
+            if sequence:
+                return sequence
+            # Fall back to direct
+            sequence = self._try_direct_path(piece_id, current_pos, target_pos, simulated_positions)
+            if sequence:
+                return sequence
+            return None
+        
+        # Direct path is blocked - identify what's blocking
+        blocker_id = self._find_blocking_piece(piece_id, current_pos, target_pos, simulated_positions)
+        
+        if blocker_id and blocker_id not in remaining_pieces:
+            # The blocker has already reached its target, try to move it out of the way
+            if self._try_move_single_blocker(blocker_id, piece_id, plan, simulated_positions, 
+                                            target_positions, current_time):
+                # Try direct path again after moving blocker
+                sequence = self._try_direct_path(piece_id, current_pos, target_pos, simulated_positions)
+                if sequence:
+                    return sequence
+        
+        elif blocker_id and blocker_id in remaining_pieces:
+            # The blocker also needs to move - try to move it toward its target first
+            blocker_target = target_positions.get(blocker_id)
+            if blocker_target:
+                blocker_pos = simulated_positions[blocker_id]
+                blocker_sequence = self._try_direct_path(blocker_id, blocker_pos, blocker_target, simulated_positions)
+                
+                if blocker_sequence and len(blocker_sequence.commands) > 0:
+                    # Move the blocker first
+                    plan.add_sequence_at_time(blocker_sequence, current_time)
+                    self._update_simulated_position(simulated_positions[blocker_id], blocker_sequence)
+                    
+                    # Check if blocker reached its target
+                    if simulated_positions[blocker_id].distance_to(blocker_target) < 1.0:
+                        remaining_pieces.discard(blocker_id)
+                    
+                    # Try our path again
+                    sequence = self._try_direct_path(piece_id, current_pos, target_pos, simulated_positions)
+                    if sequence:
+                        return sequence
+        
+        # If still blocked, try routing around obstacles
+        sequence = self._try_route_around(piece_id, current_pos, target_pos, simulated_positions)
+        if sequence:
+            return sequence
+        
+        return None
+    
+    def _try_direct_path(self, piece_id: str, current_pos: Position,
+                        target_pos: Position,
+                        simulated_positions: Dict[str, Position]) -> Optional[PieceCommandSequence]:
+        """Try a direct path to target"""
+        sequence = PieceCommandSequence(piece_id=piece_id)
+        
+        # Calculate angle to target
+        dx = target_pos.x - current_pos.x
+        dy = target_pos.y - current_pos.y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance < 1.0:
+            return None
+        
+        target_angle = math.degrees(math.atan2(dy, dx)) % 360
+        
+        # Add rotation command
+        rotate_cmd = self._create_rotate_command(current_pos.orientation, target_angle)
+        sequence.add_command(rotate_cmd)
+        
+        # Check for collisions along the path
+        max_safe_distance = self._find_max_safe_distance(
+            current_pos, target_angle, distance, piece_id, simulated_positions
+        )
+        
+        if max_safe_distance > 1.0:
+            # Move as far as safely possible
+            move_cmd = self._create_move_command(max_safe_distance)
+            sequence.add_command(move_cmd)
+            return sequence
+        
+        return None
+    
+    def _try_route_around(self, piece_id: str, current_pos: Position,
+                         target_pos: Position,
+                         simulated_positions: Dict[str, Position]) -> Optional[PieceCommandSequence]:
+        """Try to route around obstacles by going to an intermediate waypoint"""
+        sequence = PieceCommandSequence(piece_id=piece_id)
+        
+        # Try several intermediate waypoints around the obstacle
+        dx = target_pos.x - current_pos.x
+        dy = target_pos.y - current_pos.y
+        direct_distance = math.sqrt(dx*dx + dy*dy)
+        
+        if direct_distance < 1.0:
+            return None
+        
+        # Try waypoints at different angles offset from the direct path
+        best_waypoint_sequence = None
+        best_waypoint_progress = 0.0
+        
+        # Randomize which angles to try and in what order
+        angle_options = [45, -45, 90, -90, 135, -135]
+        random.shuffle(angle_options)
+        
+        for angle_offset in angle_options:
+            # Calculate waypoint perpendicular to direct path
+            mid_x = current_pos.x + dx * 0.5
+            mid_y = current_pos.y + dy * 0.5
+            
+            # Offset perpendicular to path
+            perp_angle = math.atan2(dy, dx) + math.radians(angle_offset)
+            offset_distance = min(100, direct_distance * 0.5)  # 100mm or half distance
+            
+            waypoint_x = mid_x + offset_distance * math.cos(perp_angle)
+            waypoint_y = mid_y + offset_distance * math.sin(perp_angle)
+            
+            # Check if waypoint is valid
+            if not self._is_position_valid(waypoint_x, waypoint_y, piece_id, simulated_positions):
+                continue
+            
+            # Try path to waypoint
+            waypoint_pos = Position(waypoint_x, waypoint_y, 0)
+            
+            # Calculate path to waypoint
+            wp_dx = waypoint_x - current_pos.x
+            wp_dy = waypoint_y - current_pos.y
+            wp_distance = math.sqrt(wp_dx*wp_dx + wp_dy*wp_dy)
+            wp_angle = math.degrees(math.atan2(wp_dy, wp_dx)) % 360
+            
+            # Check if we can reach waypoint
+            safe_dist_to_wp = self._find_max_safe_distance(
+                current_pos, wp_angle, wp_distance, piece_id, simulated_positions
+            )
+            
+            if safe_dist_to_wp > wp_distance * 0.9:  # Can reach at least 90% of the way
+                # Calculate progress toward goal this waypoint gives us
+                progress = safe_dist_to_wp / direct_distance
+                
+                if progress > best_waypoint_progress:
+                    test_sequence = PieceCommandSequence(piece_id=piece_id)
+                    rotate_cmd = self._create_rotate_command(current_pos.orientation, wp_angle)
+                    test_sequence.add_command(rotate_cmd)
+                    move_cmd = self._create_move_command(safe_dist_to_wp)
+                    test_sequence.add_command(move_cmd)
+                    
+                    best_waypoint_sequence = test_sequence
+                    best_waypoint_progress = progress
+        
+        return best_waypoint_sequence
+    
+    def _find_max_safe_distance(self, start_pos: Position, angle: float, 
+                               max_distance: float, moving_piece_id: str,
+                               simulated_positions: Dict[str, Position]) -> float:
+        """Find maximum distance piece can move without collision"""
+        angle_rad = math.radians(angle)
+        safe_distance = max_distance
+        
+        # Check collision with every other piece
+        for other_id, other_pos in simulated_positions.items():
+            if other_id == moving_piece_id:
+                continue
+            
+            # Check multiple points along the path
+            for test_dist in np.linspace(0, max_distance, 20):
+                test_x = start_pos.x + test_dist * math.cos(angle_rad)
+                test_y = start_pos.y + test_dist * math.sin(angle_rad)
+                
+                dx = test_x - other_pos.x
+                dy = test_y - other_pos.y
+                dist_to_other = math.sqrt(dx*dx + dy*dy)
+                
+                if dist_to_other < PIECE_RADIUS * 2 + 5:  # 5mm safety margin
+                    safe_distance = min(safe_distance, test_dist - 10)  # Stop before collision
+                    break
+        
+        return max(0, safe_distance)
+    
+    def _update_simulated_position(self, pos: Position, sequence: PieceCommandSequence):
+        """Update a simulated position based on command sequence"""
+        for command in sequence.commands:
+            if command.command_type == CommandType.ROTATE:
+                pos.orientation = command.target_orientation
+            elif command.command_type == CommandType.MOVE_STRAIGHT:
+                angle_rad = math.radians(pos.orientation)
+                pos.x += command.distance * math.cos(angle_rad)
+                pos.y += command.distance * math.sin(angle_rad)
+    
+    def _find_blocking_piece(self, piece_id: str, start_pos: Position, target_pos: Position,
+                            simulated_positions: Dict[str, Position]) -> Optional[str]:
+        """Find which piece is blocking the direct path"""
+        dx = target_pos.x - start_pos.x
+        dy = target_pos.y - start_pos.y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance < 1.0:
+            return None
+        
+        angle = math.degrees(math.atan2(dy, dx))
+        angle_rad = math.radians(angle)
+        
+        # Check for pieces along the path
+        closest_blocker = None
+        closest_dist = float('inf')
+        
+        for other_id, other_pos in simulated_positions.items():
+            if other_id == piece_id:
+                continue
+            
+            # Check multiple points along the path
+            for test_t in np.linspace(0.05, 1.0, 20):
+                test_x = start_pos.x + distance * test_t * math.cos(angle_rad)
+                test_y = start_pos.y + distance * test_t * math.sin(angle_rad)
+                
+                dx_to_other = test_x - other_pos.x
+                dy_to_other = test_y - other_pos.y
+                dist_to_other = math.sqrt(dx_to_other*dx_to_other + dy_to_other*dy_to_other)
+                
+                if dist_to_other < PIECE_RADIUS * 2 + 5:
+                    # This piece is blocking
+                    path_dist = distance * test_t
+                    if path_dist < closest_dist:
+                        closest_dist = path_dist
+                        closest_blocker = other_id
+                    break
+        
+        return closest_blocker
+    
+    def _try_move_single_blocker(self, blocker_id: str, blocked_id: str, plan: ExecutionPlan,
+                                 simulated_positions: Dict[str, Position],
+                                 target_positions: Dict[str, Position],
+                                 current_time: float) -> bool:
+        """Try to move a single blocking piece out of the way"""
+        blocker_pos = simulated_positions[blocker_id]
+        blocked_pos = simulated_positions[blocked_id]
+        blocked_target = target_positions[blocked_id]
+        
+        # Calculate perpendicular direction to move blocker
+        path_angle = math.atan2(blocked_target.y - blocked_pos.y, blocked_target.x - blocked_pos.x)
+        
+        # Randomize escape angles
+        perp_offsets = [90, -90, 45, -45, 135, -135]
+        random.shuffle(perp_offsets)
+        
+        for perp_offset in perp_offsets:
+            move_angle = path_angle + math.radians(perp_offset)
+            move_distance = random.uniform(80, 120)
+            
+            temp_x = blocker_pos.x + move_distance * math.cos(move_angle)
+            temp_y = blocker_pos.y + move_distance * math.sin(move_angle)
+            
+            if self._is_position_valid(temp_x, temp_y, blocker_id, simulated_positions):
+                temp_pos = Position(temp_x, temp_y, 0)
+                sequence = self._try_direct_path(
+                    blocker_id, blocker_pos, temp_pos, simulated_positions
+                )
+                
+                if sequence and len(sequence.commands) > 0:
+                    plan.add_sequence_at_time(sequence, current_time)
+                    self._update_simulated_position(simulated_positions[blocker_id], sequence)
+                    print(f"  Moved blocker {blocker_id} out of way for {blocked_id}")
+                    return True
+        
+        return False
+    
+    def _try_move_blocking_pieces(self, plan: ExecutionPlan, 
+                                  simulated_positions: Dict[str, Position],
+                                  target_positions: Dict[str, Position],
+                                  remaining_pieces: set, 
+                                  current_time: float) -> bool:
+        """Try to move pieces that are blocking others out of the way"""
+        
+        # Find pieces that are blocking the path of remaining pieces
+        blocking_info = []
+        
+        for blocked_id in remaining_pieces:
+            blocked_pos = simulated_positions[blocked_id]
+            target_pos = target_positions[blocked_id]
+            
+            # Calculate direct path
+            dx = target_pos.x - blocked_pos.x
+            dy = target_pos.y - blocked_pos.y
+            distance = math.sqrt(dx*dx + dy*dy)
+            
+            if distance < 1.0:
+                continue
+            
+            target_angle = math.degrees(math.atan2(dy, dx))
+            angle_rad = math.radians(target_angle)
+            
+            # Check which pieces are in the way
+            for other_id, other_pos in simulated_positions.items():
+                if other_id == blocked_id or other_id in remaining_pieces:
+                    continue
+                
+                # Check if this piece is near the path
+                for test_t in np.linspace(0.1, 0.9, 9):
+                    test_x = blocked_pos.x + distance * test_t * math.cos(angle_rad)
+                    test_y = blocked_pos.y + distance * test_t * math.sin(angle_rad)
+                    
+                    dist_to_blocker = math.sqrt((test_x - other_pos.x)**2 + (test_y - other_pos.y)**2)
+                    
+                    if dist_to_blocker < PIECE_RADIUS * 2 + 20:  # Within blocking distance
+                        blocking_info.append((other_id, blocked_id, dist_to_blocker))
+                        break
+        
+        # Try to move blocking pieces
+        if blocking_info:
+            # Sort by how much they're blocking (closest blockers first)
+            blocking_info.sort(key=lambda x: x[2])
+            
+            for blocker_id, blocked_id, _ in blocking_info[:3]:  # Try top 3 blockers
+                blocker_pos = simulated_positions[blocker_id]
+                
+                # Try to move blocker to a safe position away from the path
+                blocked_pos = simulated_positions[blocked_id]
+                target_pos = target_positions[blocked_id]
+                
+                # Calculate perpendicular direction to move blocker
+                path_angle = math.atan2(target_pos.y - blocked_pos.y, target_pos.x - blocked_pos.x)
+                
+                for perp_offset in [90, -90, 45, -45, 135, -135]:
+                    move_angle = path_angle + math.radians(perp_offset)
+                    move_distance = random.uniform(80, 120)
+                    
+                    temp_x = blocker_pos.x + move_distance * math.cos(move_angle)
+                    temp_y = blocker_pos.y + move_distance * math.sin(move_angle)
+                    
+                    if self._is_position_valid(temp_x, temp_y, blocker_id, simulated_positions):
+                        temp_pos = Position(temp_x, temp_y, 0)
+                        sequence = self._try_direct_path(
+                            blocker_id, blocker_pos, temp_pos, simulated_positions
+                        )
+                        
+                        if sequence and len(sequence.commands) > 0:
+                            plan.add_sequence_at_time(sequence, current_time)
+                            self._update_simulated_position(simulated_positions[blocker_id], sequence)
+                            print(f"  Moved blocker {blocker_id} out of way for {blocked_id}")
+                            return True
+        
+        return False
+    
+    def _is_position_valid(self, x: float, y: float, piece_id: str,
+                          simulated_positions: Dict[str, Position]) -> bool:
+        """Check if a position is on the board and collision-free"""
+        # Check board bounds
+        board_width = 8 * BOARD_SQUARE_SIZE
+        board_height = 8 * BOARD_SQUARE_SIZE
+        
+        if x < BOARD_EXTRA_SIDE or x > BOARD_EXTRA_SIDE + board_width:
+            return False
+        if y < 0 or y > board_height:
+            return False
+        
+        # Check collisions
+        for other_id, other_pos in simulated_positions.items():
+            if other_id == piece_id:
+                continue
+            
+            dx = x - other_pos.x
+            dy = y - other_pos.y
+            dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist < PIECE_RADIUS * 2 + 5:
+                return False
+        
+        return True
+    
+    def get_name(self) -> str:
+        return "AI Planner V1"
 
 class OutsmartingAIPlannerV1(PathPlanner):
     """Simple sequential planner with differential drive physics"""
     
-    def plan_movements(self, pieces: Dict[str, Piece],
-                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
+    def plan_movements(self, pieces: Dict[str, Piece], 
+                       target_positions: Dict[str, Position]) -> ExecutionPlan:
         """
         Plan movements using differential drive physics.
         Pieces can only move forward/backward in the direction they're facing.
@@ -188,9 +993,9 @@ class OutsmartingAIPlannerV1(PathPlanner):
 
                 # Check if all pieces have reached their targets. Break if yes, otherwise continue this loop.
 
-            # Store total move time for this iteration only if all pieces reach targets.
+            # Store total move time and score move accuracy. Print these for debugging.
 
-        # Select the best iteration's paths (fastest total time) and return those paths.
+        # Select the best iteration's paths (fastest total time if perfect accuracy, otherwise best accuracy) and return those paths.
 
         return paths
     
@@ -198,593 +1003,49 @@ class OutsmartingAIPlannerV1(PathPlanner):
         return "SuperDuper Anti-AI Planner V1"
 
 class SequentialPathPlanner(PathPlanner):
-    """Simple sequential planner with differential drive physics"""
+    """Simple sequential planner with command-based execution"""
     
     def plan_movements(self, pieces: Dict[str, Piece],
-                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
+                       target_positions: Dict[str, Position]) -> ExecutionPlan:
         """
-        Plan movements using differential drive physics.
-        Pieces can only move forward/backward in the direction they're facing.
+        Plan movements using command sequences.
+        All pieces execute in parallel (no collision avoidance).
         """
-        paths = {}
+        plan = ExecutionPlan()
         
         for piece_id, target_pos in target_positions.items():
             if piece_id not in pieces:
                 continue
                 
             piece = pieces[piece_id]
-            
-            # Create path: rotate to face target, then move forward
-            waypoints = [piece.position.copy()]
+            sequence = PieceCommandSequence(piece_id=piece_id)
             
             # Calculate angle to target
             dx = target_pos.x - piece.position.x
             dy = target_pos.y - piece.position.y
-            target_angle = math.degrees(math.atan2(dy, dx))
             
-            # Normalize angle to 0-360
-            target_angle = target_angle % 360
-            current_angle = piece.position.orientation % 360
+            if abs(dx) < 0.1 and abs(dy) < 0.1:
+                # Already at target
+                continue
             
-            # Calculate shortest rotation direction
-            angle_diff = (target_angle - current_angle) % 360
-            if angle_diff > 180:
-                angle_diff -= 360
+            target_angle = math.degrees(math.atan2(dy, dx)) % 360
             
-            # Step 1: Rotate to face target (no position change, only orientation)
-            waypoints.append(Position(piece.position.x, piece.position.y, target_angle))
+            # Command 1: Rotate to face target
+            rotate_cmd = self._create_rotate_command(piece.position.orientation, target_angle)
+            sequence.add_command(rotate_cmd)
             
-            # Step 2: Move forward (direction = orientation, no spinning)
-            waypoints.append(Position(target_pos.x, target_pos.y, target_angle))
+            # Command 2: Move straight to target
+            distance = piece.position.distance_to(target_pos)
+            move_cmd = self._create_move_command(distance)
+            sequence.add_command(move_cmd)
             
-            # Estimate duration
-            rotation_time = abs(angle_diff) / ANGULAR_VELOCITY  # seconds for rotation
-            movement_distance = piece.position.distance_to(target_pos)
-            movement_time = movement_distance / LINEAR_VELOCITY
-            
-            paths[piece_id] = MovePath(
-                piece_id=piece_id,
-                waypoints=waypoints,
-                duration=rotation_time + movement_time
-            )
+            plan.add_sequence(sequence)
         
-        return paths
+        return plan
     
     def get_name(self) -> str:
         return "Sequential Planner"
 
-class CollisionAwarePathPlanner(PathPlanner):
-    """
-    Advanced planner with differential drive physics and collision avoidance.
-    
-    Strategy:
-    1. Sort pieces by distance to target (closer = higher priority)
-    2. For each piece, check if direct path is clear
-    3. If collision detected:
-       a. Try to move other pieces out of the way first
-       b. Try perpendicular detour paths
-       c. Move to staging area and retry later
-    """
-    
-    COLLISION_DISTANCE = PIECE_RADIUS * 2 + 5  # mm, with buffer
-    
-    def plan_movements(self, pieces: Dict[str, Piece],
-                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
-        """Plan movements with collision avoidance using differential drive physics"""
-        paths = {}
-        
-        # Track current and target positions for all pieces
-        current_positions = {pid: p.position.copy() for pid, p in pieces.items()}
-        remaining_targets = dict(target_positions)
-        
-        # Iterate until all pieces reach targets or no more progress can be made
-        max_iterations = 10
-        for iteration in range(max_iterations):
-            if not remaining_targets:
-                break
-            
-            # Sort remaining pieces by distance to target
-            sorted_pieces = sorted(
-                remaining_targets.items(),
-                key=lambda x: current_positions[x[0]].distance_to(x[1])
-            )
-            
-            iteration_progress = False
-            
-            for piece_id, target_pos in sorted_pieces:
-                if piece_id not in pieces:
-                    continue
-                
-                # Check if already at target
-                if current_positions[piece_id].distance_to(target_pos) < 5:  # 5mm tolerance
-                    del remaining_targets[piece_id]
-                    iteration_progress = True
-                    continue
-                
-                # Try to find a collision-free path from current position
-                path = self._plan_piece_movement(
-                    piece_id, current_positions[piece_id], target_pos, 
-                    current_positions, pieces, target_positions
-                )
-                
-                if path:
-                    # Fix the piece_id in the path
-                    path.piece_id = piece_id
-                    paths[piece_id] = path
-                    # Update current position to target (simulate movement completion)
-                    current_positions[piece_id] = target_pos.copy()
-                    del remaining_targets[piece_id]
-                    iteration_progress = True
-            
-            # If no progress made, break to avoid infinite loop
-            if not iteration_progress:
-                break
-        
-        return paths
-    
-    def _plan_piece_movement(self, piece_id: str, current_pos: Position,
-                             target_pos: Position, occupied: Dict[str, Position],
-                             pieces: Dict[str, Piece], 
-                             targets: Dict[str, Position]) -> Optional[MovePath]:
-        """Plan movement for a single piece with collision avoidance"""
-        
-        # Check if direct path is clear
-        if not self._has_collision(current_pos, target_pos, occupied, piece_id):
-            return self._create_path(current_pos, target_pos, piece_id)
-        
-        # Direct path blocked - try detour
-        detour_point = self._find_detour_path(current_pos, target_pos, occupied)
-        if detour_point and not self._has_collision(current_pos, detour_point, occupied, piece_id):
-            # Go via detour, then to target
-            waypoints = [current_pos.copy()]
-            
-            # Rotate to face detour
-            dx = detour_point.x - current_pos.x
-            dy = detour_point.y - current_pos.y
-            angle1 = math.degrees(math.atan2(dy, dx)) % 360
-            waypoints.append(Position(current_pos.x, current_pos.y, angle1))
-            waypoints.append(detour_point.copy())
-            
-            # Rotate to face target
-            dx = target_pos.x - detour_point.x
-            dy = target_pos.y - detour_point.y
-            angle2 = math.degrees(math.atan2(dy, dx)) % 360
-            waypoints.append(Position(detour_point.x, detour_point.y, angle2))
-            waypoints.append(Position(target_pos.x, target_pos.y, angle2))
-            
-            # Calculate duration
-            dist1 = current_pos.distance_to(detour_point)
-            dist2 = detour_point.distance_to(target_pos)
-            rot1 = abs((angle1 - current_pos.orientation) % 360)
-            if rot1 > 180:
-                rot1 = 360 - rot1
-            rot2 = abs((angle2 - angle1) % 360)
-            if rot2 > 180:
-                rot2 = 360 - rot2
-            
-            duration = (rot1 + rot2) / ANGULAR_VELOCITY + (dist1 + dist2) / LINEAR_VELOCITY
-            
-            return MovePath(piece_id, waypoints, duration)
-        
-        # No clear path - create minimal movement
-        # Just rotate in place to target angle, then move
-        return self._create_path(current_pos, target_pos, piece_id)
-    
-    def _has_collision(self, start: Position, end: Position,
-                       occupied: Dict[str, Position], exclude_id: str) -> bool:
-        """Check if path from start to end collides with occupied positions"""
-        for other_id, other_pos in occupied.items():
-            if other_id == exclude_id:
-                continue
-            
-            # Distance from piece to line segment
-            distance = self._point_to_segment_distance(other_pos, start, end)
-            if distance < self.COLLISION_DISTANCE:
-                return True
-        
-        return False
-    
-    def _point_to_segment_distance(self, point: Position,
-                                    seg_start: Position, seg_end: Position) -> float:
-        """Calculate shortest distance from point to line segment"""
-        dx = seg_end.x - seg_start.x
-        dy = seg_end.y - seg_start.y
-        
-        if dx == 0 and dy == 0:
-            return point.distance_to(seg_start)
-        
-        t = max(0, min(1, ((point.x - seg_start.x) * dx + 
-                           (point.y - seg_start.y) * dy) / (dx*dx + dy*dy)))
-        
-        closest_x = seg_start.x + t * dx
-        closest_y = seg_start.y + t * dy
-        closest = Position(closest_x, closest_y)
-        
-        return point.distance_to(closest)
-    
-    def _find_detour_path(self, start: Position, end: Position,
-                          occupied: Dict[str, Position]) -> Optional[Position]:
-        """Find a perpendicular detour point to avoid obstacles"""
-        dx = end.x - start.x
-        dy = end.y - start.y
-        distance = math.sqrt(dx*dx + dy*dy)
-        
-        if distance == 0:
-            return None
-        
-        # Try perpendicular offsets
-        perp_x = -dy / distance
-        perp_y = dx / distance
-        
-        # Try both sides, at 1.5x the piece diameter
-        offset_distance = PIECE_RADIUS * 3
-        
-        for detour_point in [
-            Position(start.x + perp_x * offset_distance, start.y + perp_y * offset_distance, 0),
-            Position(start.x - perp_x * offset_distance, start.y - perp_y * offset_distance, 0),
-        ]:
-            # Check if this detour point is valid (not colliding and in bounds)
-            board_width = 8 * BOARD_SQUARE_SIZE
-            board_height = 8 * BOARD_SQUARE_SIZE
-            
-            if (detour_point.x < BOARD_EXTRA_SIDE or detour_point.x > BOARD_EXTRA_SIDE + board_width or
-                detour_point.y < 0 or detour_point.y > board_height):
-                continue
-                
-            if not self._point_in_collision(detour_point, occupied):
-                return detour_point
-        
-        return None
-    
-    def _point_in_collision(self, point: Position, occupied: Dict[str, Position]) -> bool:
-        """Check if a point collides with any occupied position"""
-        for other_pos in occupied.values():
-            if point.distance_to(other_pos) < self.COLLISION_DISTANCE:
-                return True
-        return False
-    
-    def _create_path(self, start: Position, end: Position, piece_id: str = "temp") -> MovePath:
-        """Create a basic path: rotate then move forward"""
-        waypoints = [start.copy()]
-        
-        # Calculate angle to target
-        dx = end.x - start.x
-        dy = end.y - start.y
-        target_angle = math.degrees(math.atan2(dy, dx)) % 360
-        
-        # Rotation step
-        waypoints.append(Position(start.x, start.y, target_angle))
-        
-        # Movement step
-        waypoints.append(Position(end.x, end.y, target_angle))
-        
-        # Duration: rotation + movement
-        angle_diff = abs((target_angle - start.orientation) % 360)
-        if angle_diff > 180:
-            angle_diff = 360 - angle_diff
-        rotation_time = angle_diff / ANGULAR_VELOCITY
-        movement_time = start.distance_to(end) / LINEAR_VELOCITY
-        
-        return MovePath(piece_id, waypoints, rotation_time + movement_time)
-    
-    def get_name(self) -> str:
-        return "Collision-Aware Planner"
-
-class IterativeOptimizationPlanner(PathPlanner):
-    """
-    Advanced planner that iteratively tests different movement orders to find
-    the fastest collision-free solution. Uses A* pathfinding and piece clearing.
-    """
-    
-    COLLISION_DISTANCE = PIECE_RADIUS * 2 + 5  # mm, with buffer
-    GRID_SIZE = 10  # mm per grid cell for A* pathfinding
-    
-    def plan_movements(self, pieces: Dict[str, Piece],
-                       target_positions: Dict[str, Position]) -> Dict[str, MovePath]:
-        """Find optimal movement order through iterative testing"""
-        
-        # Run multiple iterations with different move orders
-        iterations = 20
-        best_paths = None
-        best_time = float('inf')
-        
-        for iteration in range(iterations):
-            # Create prioritized move order
-            move_order = self._generate_move_order(pieces, target_positions, iteration)
-            
-            # Plan movements in this order
-            paths = self._plan_with_order(pieces, target_positions, move_order)
-            
-            if paths:
-                total_time = sum(p.duration for p in paths.values())
-                if total_time < best_time:
-                    best_time = total_time
-                    best_paths = paths
-        
-        return best_paths if best_paths else {}
-    
-    def _generate_move_order(self, pieces: Dict[str, Piece],
-                            targets: Dict[str, Position], iteration: int) -> List[str]:
-        """Generate piece movement order with priority and randomness"""
-        piece_scores = []
-        
-        for piece_id in targets.keys():
-            if piece_id not in pieces:
-                continue
-            
-            piece = pieces[piece_id]
-            target = targets[piece_id]
-            
-            # Calculate distance to target
-            distance = piece.position.distance_to(target)
-            
-            # Check if back rank piece (row 0 or 7)
-            is_back_rank = piece_id in ['r1', 'n1', 'b1', 'q', 'k', 'b2', 'n2', 'r2',
-                                        'R1', 'N1', 'B1', 'Q', 'K', 'B2', 'N2', 'R2']
-            
-            # Score: lower is higher priority
-            # Closer pieces and back rank pieces have higher priority
-            score = distance
-            if is_back_rank:
-                score *= 0.7  # 30% boost for back rank
-            
-            # Add randomness based on iteration
-            if iteration > 0:
-                score += random.uniform(-50, 50)
-            
-            piece_scores.append((score, piece_id))
-        
-        # Sort by score and return piece IDs
-        piece_scores.sort()
-        return [pid for _, pid in piece_scores]
-    
-    def _plan_with_order(self, pieces: Dict[str, Piece],
-                        targets: Dict[str, Position],
-                        move_order: List[str]) -> Optional[Dict[str, MovePath]]:
-        """Plan movements following the given order, with clearing logic"""
-        paths = {}
-        occupied = {pid: p.position.copy() for pid, p in pieces.items()}
-        completed = set()
-        
-        for piece_id in move_order:
-            if piece_id not in pieces or piece_id not in targets:
-                continue
-            
-            target = targets[piece_id]
-            current = occupied[piece_id]
-            
-            # Try A* pathfinding
-            path = self._astar_path(piece_id, current, target, occupied, pieces, targets)
-            
-            if path:
-                paths[piece_id] = path
-                occupied[piece_id] = target.copy()
-                completed.add(piece_id)
-            else:
-                # Try clearing blocking pieces
-                blocking = self._find_blocking_pieces(current, target, occupied, piece_id)
-                
-                if blocking:
-                    # Try to move blocking pieces out of the way
-                    cleared = False
-                    for blocker_id in blocking:
-                        if blocker_id in completed:
-                            continue
-                        
-                        # Find temporary position for blocker
-                        temp_pos = self._find_staging_position(occupied, pieces[blocker_id].position)
-                        if temp_pos:
-                            # Move blocker to staging
-                            blocker_path = self._astar_path(blocker_id, occupied[blocker_id],
-                                                           temp_pos, occupied, pieces, targets)
-                            if blocker_path:
-                                paths[blocker_id] = blocker_path
-                                occupied[blocker_id] = temp_pos.copy()
-                                cleared = True
-                                break
-                    
-                    if cleared:
-                        # Try again for main piece
-                        path = self._astar_path(piece_id, current, target, occupied, pieces, targets)
-                        if path:
-                            paths[piece_id] = path
-                            occupied[piece_id] = target.copy()
-                            completed.add(piece_id)
-        
-        return paths if paths else None
-    
-    def _astar_path(self, piece_id: str, start: Position, goal: Position,
-                   occupied: Dict[str, Position], pieces: Dict[str, Piece],
-                   targets: Dict[str, Position]) -> Optional[MovePath]:
-        """A* pathfinding with differential drive constraints"""
-        
-        # Simple direct path if clear
-        if not self._path_blocked(start, goal, occupied, piece_id):
-            return self._create_direct_path(piece_id, start, goal)
-        
-        # Try waypoint-based path with perpendicular detours
-        for offset_multiplier in [2, 3, 4]:
-            waypoint = self._find_waypoint(start, goal, occupied, offset_multiplier, piece_id)
-            if waypoint:
-                # Check both segments
-                if (not self._path_blocked(start, waypoint, occupied, piece_id) and
-                    not self._path_blocked(waypoint, goal, occupied, piece_id)):
-                    return self._create_waypoint_path(piece_id, start, waypoint, goal)
-        
-        return None
-    
-    def _path_blocked(self, start: Position, end: Position,
-                     occupied: Dict[str, Position], exclude_id: str) -> bool:
-        """Check if straight path is blocked"""
-        for other_id, other_pos in occupied.items():
-            if other_id == exclude_id:
-                continue
-            distance = self._point_to_segment_distance(other_pos, start, end)
-            if distance < self.COLLISION_DISTANCE:
-                return True
-        return False
-    
-    def _point_to_segment_distance(self, point: Position,
-                                   seg_start: Position, seg_end: Position) -> float:
-        """Calculate shortest distance from point to line segment"""
-        dx = seg_end.x - seg_start.x
-        dy = seg_end.y - seg_start.y
-        
-        if dx == 0 and dy == 0:
-            return point.distance_to(seg_start)
-        
-        t = max(0, min(1, ((point.x - seg_start.x) * dx +
-                           (point.y - seg_start.y) * dy) / (dx*dx + dy*dy)))
-        
-        closest_x = seg_start.x + t * dx
-        closest_y = seg_start.y + t * dy
-        closest = Position(closest_x, closest_y)
-        
-        return point.distance_to(closest)
-    
-    def _find_waypoint(self, start: Position, goal: Position,
-                      occupied: Dict[str, Position], offset_mult: int, exclude_id: str) -> Optional[Position]:
-        """Find waypoint perpendicular to direct path"""
-        dx = goal.x - start.x
-        dy = goal.y - start.y
-        distance = math.sqrt(dx*dx + dy*dy)
-        
-        if distance == 0:
-            return None
-        
-        # Perpendicular direction
-        perp_x = -dy / distance
-        perp_y = dx / distance
-        offset = PIECE_RADIUS * offset_mult
-        
-        # Try both sides
-        for side in [1, -1]:
-            waypoint = Position(
-                start.x + dx/2 + side * perp_x * offset,
-                start.y + dy/2 + side * perp_y * offset,
-                0
-            )
-            
-            # Check bounds
-            board_width = 8 * BOARD_SQUARE_SIZE
-            board_height = 8 * BOARD_SQUARE_SIZE
-            
-            if (waypoint.x < BOARD_EXTRA_SIDE or waypoint.x > BOARD_EXTRA_SIDE + board_width or
-                waypoint.y < 0 or waypoint.y > board_height):
-                continue
-            
-            # Check if waypoint is valid (not colliding)
-            collision = False
-            for other_id, other_pos in occupied.items():
-                if other_id == exclude_id:
-                    continue
-                if waypoint.distance_to(other_pos) < self.COLLISION_DISTANCE:
-                    collision = True
-                    break
-            
-            if not collision:
-                return waypoint
-        
-        return None
-    
-    def _find_blocking_pieces(self, start: Position, end: Position,
-                             occupied: Dict[str, Position],
-                             exclude_id: str) -> List[str]:
-        """Find pieces blocking the path"""
-        blocking = []
-        for other_id, other_pos in occupied.items():
-            if other_id == exclude_id:
-                continue
-            distance = self._point_to_segment_distance(other_pos, start, end)
-            if distance < self.COLLISION_DISTANCE:
-                blocking.append(other_id)
-        return blocking
-    
-    def _find_staging_position(self, occupied: Dict[str, Position],
-                              current: Position) -> Optional[Position]:
-        """Find temporary staging position for a piece"""
-        board_width = 8 * BOARD_SQUARE_SIZE
-        board_height = 8 * BOARD_SQUARE_SIZE
-        
-        # Try positions around the current location
-        for radius in [50, 100, 150]:
-            for angle in range(0, 360, 45):
-                rad = math.radians(angle)
-                test_x = current.x + radius * math.cos(rad)
-                test_y = current.y + radius * math.sin(rad)
-                
-                # Check bounds
-                if (test_x < BOARD_EXTRA_SIDE or test_x > BOARD_EXTRA_SIDE + board_width or
-                    test_y < 0 or test_y > board_height):
-                    continue
-                
-                test_pos = Position(test_x, test_y, 0)
-                
-                # Check collision
-                collision = False
-                for other_pos in occupied.values():
-                    if test_pos.distance_to(other_pos) < self.COLLISION_DISTANCE:
-                        collision = True
-                        break
-                
-                if not collision:
-                    return test_pos
-        
-        return None
-    
-    def _create_direct_path(self, piece_id: str, start: Position, end: Position) -> MovePath:
-        """Create simple two-waypoint path"""
-        waypoints = [start.copy()]
-        
-        dx = end.x - start.x
-        dy = end.y - start.y
-        angle = math.degrees(math.atan2(dy, dx)) % 360
-        
-        waypoints.append(Position(start.x, start.y, angle))
-        waypoints.append(Position(end.x, end.y, angle))
-        
-        angle_diff = abs((angle - start.orientation) % 360)
-        if angle_diff > 180:
-            angle_diff = 360 - angle_diff
-        
-        duration = angle_diff / ANGULAR_VELOCITY + start.distance_to(end) / LINEAR_VELOCITY
-        return MovePath(piece_id, waypoints, duration)
-    
-    def _create_waypoint_path(self, piece_id: str, start: Position, waypoint: Position,
-                             end: Position) -> MovePath:
-        """Create path through waypoint"""
-        waypoints = [start.copy()]
-        
-        # To waypoint
-        dx = waypoint.x - start.x
-        dy = waypoint.y - start.y
-        angle1 = math.degrees(math.atan2(dy, dx)) % 360
-        waypoints.append(Position(start.x, start.y, angle1))
-        waypoints.append(waypoint.copy())
-        
-        # To end
-        dx = end.x - waypoint.x
-        dy = end.y - waypoint.y
-        angle2 = math.degrees(math.atan2(dy, dx)) % 360
-        waypoints.append(Position(waypoint.x, waypoint.y, angle2))
-        waypoints.append(Position(end.x, end.y, angle2))
-        
-        # Calculate duration
-        dist1 = start.distance_to(waypoint)
-        dist2 = waypoint.distance_to(end)
-        
-        rot1 = abs((angle1 - start.orientation) % 360)
-        if rot1 > 180:
-            rot1 = 360 - rot1
-        rot2 = abs((angle2 - angle1) % 360)
-        if rot2 > 180:
-            rot2 = 360 - rot2
-        
-        duration = (rot1 + rot2) / ANGULAR_VELOCITY + (dist1 + dist2) / LINEAR_VELOCITY
-        return MovePath(piece_id, waypoints, duration)
-    
-    def get_name(self) -> str:
-        return "Iterative Optimization Planner"
 
 # ============================================================================
 # Simulator Engine
@@ -795,9 +1056,8 @@ class SimulatorEngine:
     
     def __init__(self):
         self.state = SimulatorState(pieces={})
-        self.current_piece_path: Optional[MovePath] = None
-        self.current_waypoint_index: int = 0
-        self.piece_start_time: float = 0.0
+        # Track starting positions for each command
+        self.command_start_positions: Dict[str, Position] = {}
         
     def initialize_board(self):
         """Initialize chess pieces at starting positions"""
@@ -864,176 +1124,152 @@ class SimulatorEngine:
         for piece_id, pos in positions.items():
             self.state.pieces[piece_id].position = pos
     
-    def start_execution(self, paths: Dict[str, MovePath]):
-        """Start executing movement paths"""
-        self.state.paths = paths
+    def start_execution(self, plan: ExecutionPlan):
+        """Start executing the execution plan"""
+        self.state.execution_plan = plan
         self.state.executing = True
+        self.state.execution_start_time = time.time()
         
-        # Start with first piece that has a path
-        for piece_id, path in paths.items():
-            self.state.current_piece_executing = piece_id
-            self.current_piece_path = path
-            self.current_waypoint_index = 0
-            self.piece_start_time = time.time()
-            break
+        # Store start positions for visualization
+        for piece_id, piece in self.state.pieces.items():
+            piece.start_position = piece.position.copy()
+        
+        # Initialize execution tracking for each piece
+        self.state.executing_pieces = {}
+        self.command_start_positions = {}  # Clear old command tracking
+        if plan and plan.sequences:
+            for piece_id in plan.sequences.keys():
+                self.state.executing_pieces[piece_id] = (0, 0)  # (sequence_index, command_index)
     
     def stop_execution(self):
         """Stop executing movements"""
         self.state.executing = False
-        self.state.current_piece_executing = None
-        self.current_piece_path = None
+        self.state.execution_plan = None
+        self.state.executing_pieces = {}
     
     def update(self, dt: float) -> bool:
         """Update simulator state. Returns True if still executing"""
-        if not self.state.executing or not self.state.current_piece_executing:
+        if not self.state.executing or not self.state.execution_plan:
             return False
         
-        if not self.current_piece_path:
-            return False
+        plan = self.state.execution_plan
+        elapsed = time.time() - self.state.execution_start_time
         
-        piece_id = self.state.current_piece_executing
-        piece = self.state.pieces[piece_id]
-        path = self.current_piece_path
+        any_executing = False
         
-        # Check if we have any waypoints
-        if len(path.waypoints) < 2:
-            # Skip to next piece
-            self._move_to_next_piece()
-            return self.state.executing
-        
-        elapsed = time.time() - self.piece_start_time
-        progress = min(1.0, elapsed / max(path.duration, 0.1))
-        
-        if progress >= 1.0:
-            # Piece reached final waypoint, move to next piece
-            piece.position = path.waypoints[-1].copy()
-            self._move_to_next_piece()
-            return self.state.executing
-        else:
-            # Time-based interpolation through waypoints
-            waypoints = path.waypoints
+        # Update each piece
+        for piece_id, sequences in plan.sequences.items():
+            if piece_id not in self.state.executing_pieces:
+                continue
             
-            # Calculate duration for each segment
-            segment_durations = []
-            for i in range(len(waypoints) - 1):
-                start_wp = waypoints[i]
-                end_wp = waypoints[i + 1]
-                
-                # Check if rotation or movement
-                is_rotation = (abs(start_wp.x - end_wp.x) < 0.1 and 
-                              abs(start_wp.y - end_wp.y) < 0.1)
-                
-                if is_rotation:
-                    # Pure rotation
-                    angle_diff = end_wp.orientation - start_wp.orientation
-                    while angle_diff > 180:
-                        angle_diff -= 360
-                    while angle_diff < -180:
-                        angle_diff += 360
-                    duration = abs(angle_diff) / ANGULAR_VELOCITY
-                else:
-                    # Linear movement
-                    distance = start_wp.distance_to(end_wp)
-                    duration = distance / LINEAR_VELOCITY
-                
-                segment_durations.append(duration)
+            piece = self.state.pieces[piece_id]
+            seq_idx, cmd_idx = self.state.executing_pieces[piece_id]
             
-            total_duration = sum(segment_durations)
+            # Check if this piece is done
+            if seq_idx >= len(sequences):
+                continue
             
-            if total_duration > 0:
-                # Find which segment we're in based on time
-                target_time = elapsed
-                cumulative_time = 0.0
-                segment_idx = 0
+            sequence = sequences[seq_idx]
+            
+            # Check if this sequence should have started yet
+            if elapsed < sequence.start_time:
+                any_executing = True
+                continue
+            
+            # Check if done with all commands in this sequence
+            if cmd_idx >= len(sequence.commands):
+                # Move to next sequence
+                seq_idx += 1
+                cmd_idx = 0
+                self.state.executing_pieces[piece_id] = (seq_idx, cmd_idx)
                 
-                for i, seg_dur in enumerate(segment_durations):
-                    if target_time <= cumulative_time + seg_dur:
-                        segment_idx = i
-                        break
-                    cumulative_time += seg_dur
-                else:
-                    segment_idx = len(segment_durations) - 1
-                    cumulative_time = sum(segment_durations[:-1])
+                if seq_idx < len(sequences):
+                    any_executing = True
+                continue
+            
+            command = sequence.commands[cmd_idx]
+            time_in_sequence = elapsed - sequence.start_time
+            command_start = command.start_time
+            command_end = command.start_time + command.duration
+            
+            # Check if command should have started
+            if time_in_sequence < command_start:
+                any_executing = True
+                continue
+            
+            # Check if command is complete
+            if time_in_sequence >= command_end:
+                # Clear the cached start position for this completed command
+                cmd_key = f"{piece_id}_seq{seq_idx}_cmd{cmd_idx}"
+                if cmd_key in self.command_start_positions:
+                    del self.command_start_positions[cmd_key]
                 
-                # Get segment waypoints
-                if segment_idx < len(waypoints) - 1:
-                    start_wp = waypoints[segment_idx]
-                    end_wp = waypoints[segment_idx + 1]
-                    
-                    # Calculate progress within this segment
-                    segment_duration = segment_durations[segment_idx]
-                    time_into_segment = target_time - cumulative_time
-                    segment_progress = min(1.0, time_into_segment / max(segment_duration, 0.01))
-                    
-                    # Check if rotation or movement
-                    is_rotation = (abs(start_wp.x - end_wp.x) < 0.1 and 
-                                  abs(start_wp.y - end_wp.y) < 0.1)
-                    
-                    if is_rotation:
-                        # Pure rotation
-                        angle_diff = end_wp.orientation - start_wp.orientation
-                        while angle_diff > 180:
-                            angle_diff -= 360
-                        while angle_diff < -180:
-                            angle_diff += 360
-                        
-                        new_x = start_wp.x
-                        new_y = start_wp.y
-                        new_orientation = start_wp.orientation + angle_diff * segment_progress
-                    else:
-                        # Linear movement
-                        new_x = start_wp.x + (end_wp.x - start_wp.x) * segment_progress
-                        new_y = start_wp.y + (end_wp.y - start_wp.y) * segment_progress
-                        new_orientation = end_wp.orientation  # Maintain orientation during movement
-                    
-                    # Check for collision at new position
-                    test_pos = Position(new_x, new_y, new_orientation)
-                    collision = False
-                    min_distance = PIECE_RADIUS * 2
-                    
-                    for other_id, other_piece in self.state.pieces.items():
-                        if other_id != piece_id:
-                            if test_pos.distance_to(other_piece.position) < min_distance:
-                                collision = True
-                                break
-                    
-                    if collision:
-                        # Stop movement - collision detected
-                        self._move_to_next_piece()
-                        return self.state.executing
-                    else:
-                        # Update position
-                        piece.position.x = new_x
-                        piece.position.y = new_y
-                        piece.position.orientation = new_orientation
+                # Execute final state of command only if we haven't moved to next yet
+                self._apply_command_final_state(piece, command)
+                
+                # Move to next command
+                cmd_idx += 1
+                self.state.executing_pieces[piece_id] = (seq_idx, cmd_idx)
+                any_executing = True
+                continue
+            
+            # Command is in progress - interpolate
+            progress = (time_in_sequence - command_start) / max(command.duration, 0.001)
+            progress = min(1.0, max(0.0, progress))
+            
+            self._apply_command_progress(piece, command, progress, seq_idx, cmd_idx)
+            any_executing = True
         
-        return True
+        if not any_executing:
+            self.state.executing = False
+            self.state.execution_plan = None  # Clear the plan to remove drawn paths
+        
+        return self.state.executing
     
-    def _move_to_next_piece(self):
-        """Move to the next piece that has a path"""
-        if not self.state.current_piece_executing:
-            return
+    def _apply_command_final_state(self, piece: Piece, command: PieceCommand):
+        """Apply the final state of a completed command"""
+        # Note: This is only called when transitioning to the next command
+        # The piece should already be at or very close to the final position from interpolation
+        # This ensures exact final state regardless of timing precision
+        if command.command_type == CommandType.ROTATE:
+            piece.position.orientation = command.target_orientation
+        elif command.command_type == CommandType.MOVE_STRAIGHT:
+            # The position should already be set by _apply_command_progress at 100%
+            # Just ensure orientation is correct
+            pass
+        # WAIT does nothing to position
+    
+    def _apply_command_progress(self, piece: Piece, command: PieceCommand, progress: float, seq_idx: int, cmd_idx: int):
+        """Apply partial progress of a command"""
+        # Get or store the start position for this command
+        # Use sequence and command index to uniquely identify each command execution
+        cmd_key = f"{piece.id}_seq{seq_idx}_cmd{cmd_idx}"
         
-        piece_ids = list(self.state.paths.keys())
-        if not piece_ids:
-            self.state.executing = False
-            return
+        if cmd_key not in self.command_start_positions:
+            self.command_start_positions[cmd_key] = piece.position.copy()
         
-        current_index = piece_ids.index(self.state.current_piece_executing)
+        start_pos = self.command_start_positions[cmd_key]
         
-        found_next = False
-        for i in range(current_index + 1, len(piece_ids)):
-            next_id = piece_ids[i]
-            if next_id in self.state.paths:
-                self.state.current_piece_executing = next_id
-                self.current_piece_path = self.state.paths[next_id]
-                self.piece_start_time = time.time()
-                found_next = True
-                break
-        
-        if not found_next:
-            # All pieces finished
-            self.state.executing = False
+        if command.command_type == CommandType.ROTATE:
+            # Interpolate rotation
+            start_orientation = start_pos.orientation
+            target_orientation = command.target_orientation
+            
+            # Calculate shortest rotation path
+            angle_diff = (target_orientation - start_orientation) % 360
+            if angle_diff > 180:
+                angle_diff -= 360
+            
+            piece.position.orientation = (start_orientation + angle_diff * progress) % 360
+            
+        elif command.command_type == CommandType.MOVE_STRAIGHT:
+            # Move in the direction the piece is facing
+            angle_rad = math.radians(piece.position.orientation)
+            distance_traveled = command.distance * progress
+            
+            piece.position.x = start_pos.x + distance_traveled * math.cos(angle_rad)
+            piece.position.y = start_pos.y + distance_traveled * math.sin(angle_rad)
+        # WAIT does nothing
     
     def check_collisions(self) -> List[Tuple[str, str]]:
         """Check for piece collisions. Returns list of colliding pairs"""
@@ -1052,10 +1288,10 @@ class SimulatorEngine:
         return collisions
     
     def get_total_move_time(self) -> float:
-        """Get estimated total move time for current paths"""
-        if not self.state.paths:
+        """Get estimated total move time for current execution plan"""
+        if not self.state.execution_plan:
             return 0.0
-        return sum(path.duration for path in self.state.paths.values())
+        return self.state.execution_plan.get_total_duration()
 
 # ============================================================================
 # UI and Rendering
@@ -1084,8 +1320,7 @@ class ChessRobotUI:
         self.planner_index = 0
         self.available_planners = [
             SequentialPathPlanner(),
-            CollisionAwarePathPlanner(),
-            IterativeOptimizationPlanner()
+            AI_Planner(),
         ]
         
     def get_display_position(self, x: float, y: float) -> Tuple[int, int]:
@@ -1146,30 +1381,46 @@ class ChessRobotUI:
     
     def draw_paths(self):
         """Draw planned movement paths as dotted lines"""
-        if not self.show_paths or not self.simulator.state.paths:
+        if not self.show_paths or not self.simulator.state.execution_plan:
             return
         
-        for path in self.simulator.state.paths.values():
-            waypoints = path.waypoints
-            if len(waypoints) < 2:
+        plan = self.simulator.state.execution_plan
+        for piece_id, sequences in plan.sequences.items():
+            if piece_id not in self.simulator.state.pieces:
                 continue
             
-            # Draw dotted line between waypoints
-            for i in range(len(waypoints) - 1):
-                start = waypoints[i]
-                end = waypoints[i + 1]
-                
-                start_display = self.get_display_position(start.x, start.y)
-                end_display = self.get_display_position(end.x, end.y)
-                
-                # Draw dotted line
-                self._draw_dotted_line(start_display, end_display, (150, 150, 150), 3, 5)
+            piece = self.simulator.state.pieces[piece_id]
+            # Start from current position when planning, or start_position during execution
+            if self.simulator.state.executing and piece.start_position:
+                current_pos = piece.start_position.copy()
+            else:
+                current_pos = piece.position.copy()
             
-            # Draw target position marker
-            if len(waypoints) > 0:
-                target = waypoints[-1]
-                display_x, display_y = self.get_display_position(target.x, target.y)
-                pygame.draw.circle(self.screen, (100, 255, 100), (display_x, display_y), 8, 2)
+            for sequence in sequences:
+                for command in sequence.commands:
+                    if command.command_type == CommandType.ROTATE:
+                        # Draw rotation arc indicator
+                        display_pos = self.get_display_position(current_pos.x, current_pos.y)
+                        pygame.draw.circle(self.screen, (200, 150, 100), display_pos, 10, 1)
+                        current_pos.orientation = command.target_orientation
+                        
+                    elif command.command_type == CommandType.MOVE_STRAIGHT:
+                        # Draw movement line
+                        start_display = self.get_display_position(current_pos.x, current_pos.y)
+                        
+                        angle_rad = math.radians(current_pos.orientation)
+                        end_x = current_pos.x + command.distance * math.cos(angle_rad)
+                        end_y = current_pos.y + command.distance * math.sin(angle_rad)
+                        end_display = self.get_display_position(end_x, end_y)
+                        
+                        self._draw_dotted_line(start_display, end_display, (150, 150, 150), 3, 5)
+                        
+                        current_pos.x = end_x
+                        current_pos.y = end_y
+            
+            # Draw final target marker
+            display_x, display_y = self.get_display_position(current_pos.x, current_pos.y)
+            pygame.draw.circle(self.screen, (100, 255, 100), (display_x, display_y), 8, 2)
     
     def _draw_dotted_line(self, start: Tuple[int, int], end: Tuple[int, int],
                           color: Tuple[int, int, int], dot_size: int, gap: int):
@@ -1263,8 +1514,8 @@ class ChessRobotUI:
                     self.plan_movements()
                     print("Movements planned")
                 elif btn["action"] == "execute":
-                    if self.simulator.state.paths:
-                        self.simulator.start_execution(self.simulator.state.paths)
+                    if self.simulator.state.execution_plan:
+                        self.simulator.start_execution(self.simulator.state.execution_plan)
                         print("Execution started")
     
     def handle_key_press(self, key: int):
@@ -1292,8 +1543,8 @@ class ChessRobotUI:
             x, y = board_coords_to_world(col, row)
             target_positions[piece_id] = Position(x, y, 0)
         
-        paths = self.path_planner.plan_movements(self.simulator.state.pieces, target_positions)
-        self.simulator.state.paths = paths
+        plan = self.path_planner.plan_movements(self.simulator.state.pieces, target_positions)
+        self.simulator.state.execution_plan = plan
     
     def run(self):
         """Main UI loop"""
@@ -1437,8 +1688,6 @@ if __name__ == "__main__":
         
         planners = [
             SequentialPathPlanner(),
-            CollisionAwarePathPlanner(),
-            IterativeOptimizationPlanner()
         ]
         
         for planner in planners:
