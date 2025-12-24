@@ -10,10 +10,15 @@
  * Responsible for:
  * - Estimating robot position based on wheel odometry
  * - Tracking step counts from stepper motors
- * - Updating robot state with calculated position
+ * - Continuously updating the robot's "true" position estimate
  * - Potentially fusing IMU or other sensor data (future enhancement)
  * 
- * @param pvParameters Pointer to initialization parameters (unused)
+ * Note: The position estimator always runs periodically and updates
+ * the robot's true_x, true_y, and true_theta values. Other tasks can
+ * call robot->updatePositionFromEstimate() to copy these values to
+ * the active position when needed.
+ * 
+ * @param pvParameters Pointer to Robot instance
  */
 void PositionEstimator_Task(void* pvParameters);
 

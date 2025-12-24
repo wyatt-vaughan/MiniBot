@@ -1,10 +1,6 @@
 #include "motion_queue.h"
 #include <stdlib.h>
 
-// ============================================================================
-// Motion Queue Implementation
-// ============================================================================
-
 MotionQueue* MotionQueue_Create(uint16_t max_queue_size) {
     MotionQueue* queue = (MotionQueue*)malloc(sizeof(MotionQueue));
     if (queue == NULL) {
@@ -52,16 +48,20 @@ bool MotionQueue_Enqueue(MotionQueue* queue, MotionCommand* command) {
         return false;
     }
     
-    command->next = NULL;
+    MotionCommand* heap_command = (MotionCommand*)malloc(sizeof(MotionCommand));
+    if (heap_command == NULL) {
+        return false;
+    }
+    
+    *heap_command = *command;
+    heap_command->next = NULL;
     
     if (queue->head == NULL) {
-        // Queue is empty
-        queue->head = command;
-        queue->tail = command;
+        queue->head = heap_command;
+        queue->tail = heap_command;
     } else {
-        // Add to tail
-        queue->tail->next = command;
-        queue->tail = command;
+        queue->tail->next = heap_command;
+        queue->tail = heap_command;
     }
     
     queue->current_size++;
@@ -77,11 +77,9 @@ bool MotionQueue_Dequeue(MotionQueue* queue, MotionCommand* command) {
         return false;
     }
     
-    // Copy data from head to output structure
     *command = *queue->head;
     command->next = NULL;
     
-    // Remove from queue
     MotionCommand* old_head = queue->head;
     queue->head = queue->head->next;
     
@@ -90,8 +88,7 @@ bool MotionQueue_Dequeue(MotionQueue* queue, MotionCommand* command) {
     }
     
     queue->current_size--;
-    
-    // Note: We don't free old_head here as the caller may need to manage memory
+    free(old_head);
     
     return true;
 }
@@ -101,7 +98,6 @@ void MotionQueue_Destroy(MotionQueue* queue) {
         return;
     }
     
-    // Free all commands in queue
     MotionCommand* current = queue->head;
     while (current != NULL) {
         MotionCommand* next = current->next;

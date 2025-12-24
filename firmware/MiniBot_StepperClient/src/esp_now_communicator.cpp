@@ -1,13 +1,10 @@
 #include "esp_now_communicator.h"
 
-// Static variables for task state
 static MotionQueue* comm_queue = NULL;
 static EspNowReceiveCallback receive_callback = nullptr;
+static Robot* g_robot_ptr = NULL;
 
-// Forward declaration of the ESP-NOW receive callback
 static void esp_now_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len);
-
-// Message parsing callback - processes received messages and enqueues commands
 static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data, int len);
 
 bool EspNowCommunicator_Init(MotionQueue* motion_queue) {
@@ -17,65 +14,49 @@ bool EspNowCommunicator_Init(MotionQueue* motion_queue) {
     
     comm_queue = motion_queue;
     
-    // Set up WiFi radio, register callbacks for received messages
     WiFi.mode(WIFI_STA);
     WiFi.setTxPower(WIFI_POWER);
     esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
     Serial.printf("WiFi started on channel %d\n", WiFi.channel());
 
-    // ESP-NOW Setup
     if (esp_now_init() != ESP_OK) {
         Serial.println("ERROR: ESP-NOW initialization failed");
         return false;
     }
     
-    // Register the receive callback
     esp_now_register_recv_cb(esp_now_recv_cb);
     
-    // Add a broadcast peer (MAC address FF:FF:FF:FF:FF:FF)
     esp_now_peer_info_t peer = {};
     memset(&peer, 0, sizeof(esp_now_peer_info_t));
-    memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);  // Broadcast address
+    memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
     peer.channel = WIFI_CHANNEL;
     
     if (esp_now_add_peer(&peer) != ESP_OK) {
         Serial.println("WARNING: Failed to add broadcast peer (may already exist)");
     }
     
-    // Register the message parsing handler
     EspNowCommunicator_RegisterCallback(esp_now_message_handler);
-    
     return true;
 }
 
-/**
- * Internal ESP-NOW receive callback - this will be called by the ESP-NOW stack
- */
 static void esp_now_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
     if (mac_addr == NULL || data == NULL) {
         return;
     }
     
-    // Call the registered user callback if one exists
     if (receive_callback) {
         receive_callback(mac_addr, data, len);
     }
 }
 
-/**
- * Message parsing callback - checks destination address and message type
- * Enqueues appropriate commands to the motion queue
- */
 static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data, int len) {
     if (len < 2 || comm_queue == NULL) {
         return;
     }
     
-    // Extract destination address and message type from first 2 bytes
     uint8_t target_id = data[0];
     uint8_t msg_type = data[1];
     
-    // Check if this message is for us
     if (target_id != DEVICE_ID) {
         Serial.printf("Message not for us (target: 0x%02X, our ID: 0x%02X), ignoring\n", target_id, DEVICE_ID);
         return;
@@ -85,19 +66,16 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
     
     switch (msg_type) {
         case MSG_TYPE_POSITION_COMMAND: {
-            // Check message length
             if (len < sizeof(PositionCommand)) {
                 Serial.printf("ERROR: PositionCommand message too short (got %d, need %zu)\n", len, sizeof(PositionCommand));
                 return;
             }
             
-            // Cast and parse the message
             PositionCommand* cmd = (PositionCommand*)data;
             
             Serial.printf("PositionCommand: target=(%f, %f), angle=%f rad, duration=%f ms\n",
                          cmd->target_x_mm, cmd->target_y_mm, cmd->target_a_rad, cmd->move_duration_ms);
             
-            // Create a MotionCommand from the PositionCommand
             MotionCommand motion_cmd = MotionCommand{
                 cmd->target_x_mm,
                 cmd->target_y_mm,
@@ -106,7 +84,6 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 NULL
             };
             
-            // Enqueue the command
             if (MotionQueue_Enqueue(comm_queue, &motion_cmd)) {
                 Serial.println("  Successfully enqueued PositionCommand");
             } else {
@@ -129,7 +106,34 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 Serial.printf("ERROR: PositionRequest message too short (got %d, need %zu)\n", len, sizeof(PositionRequest));
                 return;
             }
-            Serial.println("Received PositionRequest (not yet implemented)");
+            
+            PositionRequest* req = (PositionRequest*)data;
+            Serial.printf("Received PositionRequest (timestamp: %u)\n", req->timestamp);
+            
+            if (g_robot_ptr == NULL) {
+                Serial.println("ERROR: Robot pointer not available");
+                return;
+            }
+            
+            float x, y, theta;
+            g_robot_ptr->getPosition(&x, &y, &theta);
+            
+            AckMessage ack = {};
+            ack.responderID = DEVICE_ID;
+            ack.msg_type = MSG_TYPE_ACK_MESSAGE;
+            ack.timestamp = millis();
+            ack.x = x;
+            ack.y = y;
+            ack.orientation_rad = theta;
+            ack.battery_voltage = g_robot_ptr->getBatteryVoltage();
+            
+            esp_err_t result = esp_now_send(mac_addr, (uint8_t*)&ack, sizeof(AckMessage));
+            if (result == ESP_OK) {
+                Serial.printf("Sent AckMessage to sender: pos=(%.2f, %.2f), angle=%.2f rad, battery=%.2f V\n",
+                             ack.x, ack.y, ack.orientation_rad, ack.battery_voltage);
+            } else {
+                Serial.printf("ERROR: Failed to send AckMessage (error: %d)\n", result);
+            }
             break;
         }
         
@@ -154,19 +158,19 @@ bool EspNowCommunicator_RegisterCallback(EspNowReceiveCallback callback) {
 }
 
 void EspNowCommunicator_Task(void* pvParameters) {
-    // Extract robot pointer from task parameters
     Robot* robot = (Robot*)pvParameters;
     
-    // Task initialization
     if (comm_queue == NULL || robot == NULL) {
         vTaskDelete(NULL);
         return;
     }
     
+    g_robot_ptr = robot;
+    
     // TEST LOOP
-    MotionCommand testmc0 = MotionCommand{100.0f, 0.0f, 0.0f, 2000, NULL};
-    MotionCommand testmc1 = MotionCommand{20.0f, 0.0f, 2.0f, 1000, NULL};
-    MotionCommand testmc2 = MotionCommand{30.0f, 30.0f, 0.0f, 1000, NULL};
+    MotionCommand testmc0 = MotionCommand{10.0f, 0.0f, 0.0f, 2000, NULL};
+    MotionCommand testmc1 = MotionCommand{0.0f, 0.0f, 0.0f, 1000, NULL};
+    MotionCommand testmc2 = MotionCommand{0.0f, 0.0f, 1.0f, 1000, NULL};
     MotionCommand testmc3 = MotionCommand{0.0f, 0.0f, 0.0f, 2000, NULL};
     randomSeed(esp_random());
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -179,14 +183,28 @@ void EspNowCommunicator_Task(void* pvParameters) {
         else
             Serial.println("Failed to enqueue testmc0");
         Serial.println(MotionQueue_GetSize(comm_queue));
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(1));
         
-        if (MotionQueue_Enqueue(comm_queue, &testmc3))
-            Serial.println("Enqueued testmc3");
+        if (MotionQueue_Enqueue(comm_queue, &testmc1))
+            Serial.println("Enqueued testmc1");
         else
-            Serial.println("Failed to enqueue testmc3");
+            Serial.println("Failed to enqueue testmc1");
         Serial.println(MotionQueue_GetSize(comm_queue));
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        vTaskDelay(pdMS_TO_TICKS(1));
+
+        if (MotionQueue_Enqueue(comm_queue, &testmc2))
+            Serial.println("Enqueued testmc2");
+        else
+            Serial.println("Failed to enqueue testmc2");
+        Serial.println(MotionQueue_GetSize(comm_queue));
+        vTaskDelay(pdMS_TO_TICKS(1));
+
+        if (MotionQueue_Enqueue(comm_queue, &testmc1))
+            Serial.println("Enqueued testmc1");
+        else
+            Serial.println("Failed to enqueue testmc1");
+        Serial.println(MotionQueue_GetSize(comm_queue));
+        vTaskDelay(pdMS_TO_TICKS(8000));
 
         // if (MotionQueue_Enqueue(comm_queue, &testmc2))
         //     Serial.println("Enqueued testmc2");

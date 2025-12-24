@@ -99,10 +99,16 @@ private:
     float wheel_radius_mm;
     float wheel_spacing_mm;
 
-    // Robot pose
+    // Robot pose (active/commanded position)
     float positionX;
     float positionY;
     float orientation;
+    
+    // True position estimate (continuously updated by position estimator)
+    float true_x;
+    float true_y;
+    float true_theta;
+    
     float battery_voltage;
     uint8_t system_status;
 
@@ -125,10 +131,18 @@ public:
     bool initialize();
     
     /**
-     * Update robot position based on wheel step counts
+     * Update the true position estimate based on wheel step counts
      * Uses odometry to calculate position change
+     * This is called continuously by the position estimator task
      */
-    void updatePosition();
+    void updateTruePosition();
+    
+    /**
+     * Copy the true position estimate to the active position
+     * This should be called by tasks that need to sync the active position
+     * with the latest position estimate (e.g., after motion completion)
+     */
+    void updatePositionFromEstimate();
     
     /**
      * Get current robot position
@@ -164,6 +178,12 @@ public:
      */
     void setBatteryVoltage(float voltage);
     
+    /**
+     * Get battery voltage
+     * @return Battery voltage in volts
+     */
+    float getBatteryVoltage() const { return battery_voltage; }
+    
     // Motion control configuration getters
     float getStepsPerRevolution() const { return steps_per_revolution; }
     float getRobotMaxVelocity() const { return robot_max_velocity_mm_s; }
@@ -185,6 +205,8 @@ private:
     
     float calculateVelocityAtTime(float elapsed_ms, float remaining_ms, float accel_phase_ms,
                                    float max_velocity_mm_s, bool full_profile);
+    
+    float calculateMaxVelocityForTime(float distance_mm, float target_time_s, float max_accel);
     
     void executeMotionLoop(int32_t total_steps, float base_step_time_us,
                            float max_velocity_mm_s, const MotionProfile& profile,

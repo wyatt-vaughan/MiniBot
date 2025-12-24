@@ -40,6 +40,8 @@ typedef struct {
   uint32_t timestamp;
   float x;
   float y;
+  float orientation_rad;
+  float battery_voltage;
 } AckMessage;
 
 #endif // __MESSAGES_ESPNOW_H__

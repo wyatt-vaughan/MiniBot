@@ -38,11 +38,14 @@ class SimulatorEngine:
     def initialize_board(self):
         """Initialize chess pieces at starting positions"""
         self.state.pieces = {}
+        hex_counter = 0
         for piece_id, (col, row) in PIECE_START_POSITIONS.items():
             # Use board_coords_to_world to center pieces on their squares
             x, y = board_coords_to_world(col, row)
             pos = Position(x, y, 0)
-            self.state.pieces[piece_id] = Piece(piece_id, pos, pos.copy())
+            hex_id = f"{hex_counter:02X}"
+            self.state.pieces[piece_id] = Piece(piece_id, pos, pos.copy(), hex_id)
+            hex_counter += 1
     
     def randomize_positions(self):
         """Randomize piece positions on the board ensuring no collisions"""
@@ -356,6 +359,16 @@ class ChessRobotUI:
         ]
         self.buttons = []  # Will be populated by draw_ui_buttons
         
+        # Manual command panel state
+        self.manual_cmd_inputs = {
+            'address': '',
+            'x': '',
+            'y': '',
+            'orientation': '',
+            'move_time': ''
+        }
+        self.active_input = None  # Which input field is currently active
+        
     def get_display_position(self, x: float, y: float) -> Tuple[int, int]:
         """Convert world coordinates (mm) to display coordinates (pixels)"""
         # Account for board offset in world space (pieces placed with offset)
@@ -456,9 +469,14 @@ class ChessRobotUI:
             end_y = display_y + 12 * math.sin(angle_rad)
             pygame.draw.line(self.screen, (0, 0, 0), (display_x, display_y), (end_x, end_y), 2)
             
-            # Draw piece label
+            # Draw piece label with hex ID
             label_text = self.font_small.render(piece.id, True, (0, 0, 0))
             self.screen.blit(label_text, (display_x - label_text.get_width() // 2, display_y - label_text.get_height() // 2))
+            
+            # Draw hex ID below piece
+            if piece.hex_id:
+                hex_label = self.font_small.render(f"0x{piece.hex_id}", True, (0, 0, 100))
+                self.screen.blit(hex_label, (display_x - hex_label.get_width() // 2, display_y + 18))
     
     def draw_paths(self):
         """Draw planned movement paths as dotted lines"""
@@ -618,6 +636,368 @@ class ChessRobotUI:
             text = self.font_small.render("No collisions", True, (0, 100, 0))
         self.screen.blit(text, (words_x, y_offset + 390))
     
+    def draw_manual_command_panel(self):
+        """Draw manual command control panel"""
+        # Position to the right of the board
+        board_right = BOARD_DISPLAY_OFFSET_X + 8 * BOARD_DISPLAY_SQUARE_SIZE
+        panel_x = board_right + 30
+        panel_y = BOARD_DISPLAY_OFFSET_Y + 200
+        panel_width = 450
+        panel_height = 250
+        
+        # Draw panel background
+        panel_rect = pygame.Rect(panel_x, panel_y, panel_width, panel_height)
+        pygame.draw.rect(self.screen, (240, 240, 240), panel_rect)
+        pygame.draw.rect(self.screen, (100, 100, 100), panel_rect, 2)
+        
+        # Title
+        title = self.font_medium.render("Manual Command", True, (0, 0, 0))
+        self.screen.blit(title, (panel_x + 10, panel_y + 10))
+        
+        # Input fields
+        input_y = panel_y + 50
+        label_x = panel_x + 15
+        input_x = panel_x + 150
+        input_width = 150
+        input_height = 30
+        line_spacing = 40
+        
+        self.manual_input_rects = {}
+        
+        fields = [
+            ('address', 'Address (hex):'),
+            ('x', 'X Position (mm):'),
+            ('y', 'Y Position (mm):'),
+            ('orientation', 'Orientation (°):'),
+            ('move_time', 'Move Time (s):')
+        ]
+        
+        for i, (field_name, label_text) in enumerate(fields):
+            y_pos = input_y + i * line_spacing
+            
+            # Draw label
+            label = self.font_small.render(label_text, True, (0, 0, 0))
+            self.screen.blit(label, (label_x, y_pos + 5))
+            
+            # Draw input box
+            input_rect = pygame.Rect(input_x, y_pos, input_width, input_height)
+            self.manual_input_rects[field_name] = input_rect
+            
+            # Highlight active input
+            if self.active_input == field_name:
+                pygame.draw.rect(self.screen, (255, 255, 200), input_rect)
+                pygame.draw.rect(self.screen, (100, 100, 255), input_rect, 2)
+            else:
+                pygame.draw.rect(self.screen, (255, 255, 255), input_rect)
+                pygame.draw.rect(self.screen, (100, 100, 100), input_rect, 1)
+            
+            # Draw input text
+            text_value = self.manual_cmd_inputs[field_name]
+            text_surface = self.font_small.render(text_value, True, (0, 0, 0))
+            self.screen.blit(text_surface, (input_x + 5, y_pos + 5))
+        
+        # Send button
+        send_btn_x = input_x + input_width + 30
+        send_btn_y = input_y + len(fields) * line_spacing + 10
+        send_btn = {
+            "label": "Send Command",
+            "action": "send_manual",
+            "x": send_btn_x,
+            "y": send_btn_y
+        }
+        
+        send_rect = pygame.Rect(send_btn["x"], send_btn["y"], 180, 40)
+        pygame.draw.rect(self.screen, (100, 200, 100), send_rect)
+        pygame.draw.rect(self.screen, (0, 0, 0), send_rect, 2)
+        
+        text = self.font_small.render(send_btn["label"], True, (0, 0, 0))
+        self.screen.blit(text, (send_rect.centerx - text.get_width() // 2, 
+                               send_rect.centery - text.get_height() // 2))
+        
+        send_btn["rect"] = send_rect
+        self.buttons.append(send_btn)
+    
+    def handle_text_input(self, key: int):
+        """Handle text input for manual command fields"""
+        if self.active_input is None:
+            return
+        
+        current_text = self.manual_cmd_inputs[self.active_input]
+        
+        if key == pygame.K_RETURN or key == pygame.K_TAB:
+            # Move to next field
+            fields = list(self.manual_cmd_inputs.keys())
+            current_index = fields.index(self.active_input)
+            next_index = (current_index + 1) % len(fields)
+            self.active_input = fields[next_index]
+        elif key == pygame.K_BACKSPACE:
+            self.manual_cmd_inputs[self.active_input] = current_text[:-1]
+        elif key == pygame.K_ESCAPE:
+            self.active_input = None
+        else:
+            # Add character if it's valid
+            char = pygame.key.name(key)
+            if len(char) == 1:
+                # Allow alphanumeric, period, minus sign
+                if char.isalnum() or char in ['.', '-']:
+                    self.manual_cmd_inputs[self.active_input] = current_text + char
+    
+    def send_manual_command(self):
+        """Package and send manual command via ESP-NOW and apply to piece in UI"""
+        try:
+            # Parse input values
+            address = self.manual_cmd_inputs['address'].strip().upper()
+            x = float(self.manual_cmd_inputs['x']) if self.manual_cmd_inputs['x'] else 0.0
+            y = float(self.manual_cmd_inputs['y']) if self.manual_cmd_inputs['y'] else 0.0
+            orientation = float(self.manual_cmd_inputs['orientation']) if self.manual_cmd_inputs['orientation'] else 0.0
+            move_time = float(self.manual_cmd_inputs['move_time']) if self.manual_cmd_inputs['move_time'] else 1.0
+            
+            # Validate address is hex
+            if not address:
+                print("Error: Address is required")
+                return
+            
+            try:
+                # Validate hex format
+                int(address, 16)
+            except ValueError:
+                print(f"Error: Invalid hex address '{address}'")
+                return
+            
+            # Find the piece with this hex ID
+            target_piece = None
+            for piece in self.simulator.state.pieces.values():
+                if piece.hex_id == address:
+                    target_piece = piece
+                    break
+            
+            if not target_piece:
+                print(f"Error: No piece found with address 0x{address}")
+                return
+            
+            # Create command data
+            command_data = {
+                'address': address,
+                'target_x': x,
+                'target_y': y,
+                'target_orientation': orientation,
+                'move_time': move_time
+            }
+            
+            print(f"\n=== Sending Manual Command ===")
+            print(f"  Address: 0x{address} (Piece: {target_piece.id})")
+            print(f"  Current Position: ({target_piece.position.x:.1f}, {target_piece.position.y:.1f}) mm @ {target_piece.position.orientation:.1f}°")
+            print(f"  Target Position: ({x:.1f}, {y:.1f}) mm @ {orientation:.1f}°")
+            print(f"  Move Time: {move_time:.2f}s")
+            
+            # Call ESP-NOW send function (placeholder)
+            self.send_espnow_command(command_data)
+            
+            # Create proper command sequence using current absolute position
+            current_pos = target_piece.position
+            target_pos = Position(x, y, orientation)
+            
+            # Calculate distance from current to target position
+            dx = target_pos.x - current_pos.x
+            dy = target_pos.y - current_pos.y
+            distance = math.sqrt(dx*dx + dy*dy)
+            
+            sequence = PieceCommandSequence(piece_id=target_piece.id)
+            
+            # Check if we're just rotating in place (no position change)
+            if distance < 0.1:  # Minimum 0.1mm threshold
+                # Just rotate to target orientation
+                rotation_needed = self._calculate_rotation_needed(current_pos.orientation, orientation)
+                if abs(rotation_needed) > 1.0:
+                    rotate_duration = abs(rotation_needed) / ANGULAR_VELOCITY
+                    rotate_cmd = PieceCommand(
+                        command_type=CommandType.ROTATE,
+                        duration=rotate_duration,
+                        target_orientation=orientation
+                    )
+                    sequence.add_command(rotate_cmd)
+                    print(f"  Rotate in place: {rotation_needed:.1f}° to target orientation")
+            else:
+                # Use arc movement from current position/orientation to target position/orientation
+                # Try both CW and CCW to find the shorter arc
+                
+                # Estimate radius based on distance (use larger radius for smoother arcs)
+                base_radius = distance * 2.0
+                
+                # Try CW arc (positive radius)
+                cw_arc = self._calculate_arc_move(current_pos, target_pos, base_radius)
+                
+                # Try CCW arc (negative radius)
+                ccw_arc = self._calculate_arc_move(current_pos, target_pos, -base_radius)
+                
+                # Choose the shorter arc
+                if cw_arc and ccw_arc:
+                    if cw_arc['arc_length'] < ccw_arc['arc_length']:
+                        chosen_arc = cw_arc
+                        direction = "CW"
+                    else:
+                        chosen_arc = ccw_arc
+                        direction = "CCW"
+                elif cw_arc:
+                    chosen_arc = cw_arc
+                    direction = "CW"
+                elif ccw_arc:
+                    chosen_arc = ccw_arc
+                    direction = "CCW"
+                else:
+                    # Fallback: straight line move
+                    chosen_arc = None
+                
+                if chosen_arc:
+                    # Use arc move
+                    arc_duration = move_time
+                    arc_cmd = PieceCommand(
+                        command_type=CommandType.MOVE_ARC,
+                        duration=arc_duration,
+                        target_position=target_pos,
+                        arc_radius=chosen_arc['radius']
+                    )
+                    sequence.add_command(arc_cmd)
+                    print(f"  Arc move {direction}: {distance:.1f}mm with radius {abs(chosen_arc['radius']):.1f}mm")
+                else:
+                    # Fallback to straight line
+                    # First rotate to face target direction
+                    travel_angle = math.degrees(math.atan2(dy, dx)) % 360
+                    rotation_needed = self._calculate_rotation_needed(current_pos.orientation, travel_angle)
+                    if abs(rotation_needed) > 1.0:
+                        rotate_duration = abs(rotation_needed) / ANGULAR_VELOCITY
+                        rotate_cmd = PieceCommand(
+                            command_type=CommandType.ROTATE,
+                            duration=rotate_duration,
+                            target_orientation=travel_angle
+                        )
+                        sequence.add_command(rotate_cmd)
+                    
+                    # Move straight
+                    move_duration = distance / LINEAR_VELOCITY
+                    move_cmd = PieceCommand(
+                        command_type=CommandType.MOVE_STRAIGHT,
+                        duration=move_duration,
+                        distance=distance
+                    )
+                    sequence.add_command(move_cmd)
+                    
+                    # Final rotation to target orientation
+                    final_rotation = self._calculate_rotation_needed(travel_angle, orientation)
+                    if abs(final_rotation) > 1.0:
+                        final_rotate_duration = abs(final_rotation) / ANGULAR_VELOCITY
+                        final_rotate_cmd = PieceCommand(
+                            command_type=CommandType.ROTATE,
+                            duration=final_rotate_duration,
+                            target_orientation=orientation
+                        )
+                        sequence.add_command(final_rotate_cmd)
+                    print(f"  Straight line: {distance:.1f}mm")
+            
+            # Create execution plan with this sequence
+            plan = ExecutionPlan()
+            plan.sequences[target_piece.id] = [sequence]
+            
+            # Start execution
+            self.simulator.start_execution(plan)
+            
+            print("  Command sent and applied to piece!\n")
+            
+        except ValueError as e:
+            print(f"Error: Invalid numeric value - {e}")
+        except Exception as e:
+            print(f"Error sending command: {e}")
+    
+    def _calculate_rotation_needed(self, current_angle: float, target_angle: float) -> float:
+        """Calculate shortest rotation needed from current to target angle"""
+        # Normalize angles to 0-360
+        current = current_angle % 360
+        target = target_angle % 360
+        
+        # Calculate shortest rotation
+        diff = (target - current) % 360
+        if diff > 180:
+            diff -= 360
+        
+        return diff
+    
+    def _calculate_arc_move(self, start_pos: Position, end_pos: Position, arc_radius: float) -> dict:
+        """
+        Calculate arc move parameters from start to end position/orientation
+        
+        Args:
+            start_pos: Starting position with orientation
+            end_pos: Ending position with orientation
+            arc_radius: Radius to try (positive=CW, negative=CCW)
+            
+        Returns:
+            Dictionary with arc parameters or None if arc is not feasible
+        """
+        # Calculate chord distance
+        dx = end_pos.x - start_pos.x
+        dy = end_pos.y - start_pos.y
+        chord_length = math.sqrt(dx*dx + dy*dy)
+        
+        if chord_length < 0.1:
+            return None
+        
+        abs_radius = abs(arc_radius)
+        
+        # Check if arc is geometrically possible
+        if chord_length > 2 * abs_radius:
+            # Chord too long for this radius
+            return None
+        
+        # Calculate central angle
+        sin_half_theta = chord_length / (2 * abs_radius)
+        sin_half_theta = min(1.0, max(-1.0, sin_half_theta))
+        half_theta = math.asin(sin_half_theta)
+        theta = 2 * half_theta  # Central angle in radians
+        
+        # Calculate arc length
+        arc_length = abs_radius * theta
+        
+        # Calculate the expected final orientation after following the arc
+        # For CW (positive radius): orientation decreases by theta
+        # For CCW (negative radius): orientation increases by theta
+        theta_degrees = math.degrees(theta)
+        if arc_radius > 0:
+            # CW turn
+            expected_final_orientation = (start_pos.orientation - theta_degrees) % 360
+        else:
+            # CCW turn
+            expected_final_orientation = (start_pos.orientation + theta_degrees) % 360
+        
+        # Check how close this gets us to the target orientation
+        orientation_error = abs(self._calculate_rotation_needed(expected_final_orientation, end_pos.orientation))
+        
+        # If orientation error is too large (>90 degrees), this arc doesn't work well
+        if orientation_error > 90:
+            return None
+        
+        return {
+            'radius': arc_radius,
+            'arc_length': arc_length,
+            'central_angle': theta_degrees,
+            'orientation_error': orientation_error
+        }
+    
+    def send_espnow_command(self, command_data: Dict):
+        """
+        Placeholder function for sending command via ESP-NOW
+        
+        Args:
+            command_data: Dictionary containing:
+                - address: hex string of target ESP32 MAC address
+                - target_x: X position in mm
+                - target_y: Y position in mm  
+                - target_orientation: orientation in degrees
+                - move_time: time to complete move in seconds
+        """
+        # TODO: Implement actual ESP-NOW communication
+        # This will be replaced with actual ESP-NOW protocol implementation
+        print("[ESP-NOW PLACEHOLDER] Would send command with data:")
+    
     def handle_input(self):
         """Handle user input"""
         mouse_pos = pygame.mouse.get_pos()
@@ -628,10 +1008,22 @@ class ChessRobotUI:
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 self.handle_button_click(mouse_pos)
             elif event.type == pygame.KEYDOWN:
-                self.handle_key_press(event.key)
+                if self.active_input is not None:
+                    # Handle text input for manual command panel
+                    self.handle_text_input(event.key)
+                else:
+                    self.handle_key_press(event.key)
     
     def handle_button_click(self, mouse_pos: Tuple[int, int]):
         """Handle button clicks"""
+        # Check input field clicks
+        if hasattr(self, 'manual_input_rects'):
+            for field_name, rect in self.manual_input_rects.items():
+                if rect.collidepoint(mouse_pos):
+                    self.active_input = field_name
+                    return
+        
+        # Check button clicks
         for btn in self.buttons:
             if btn["rect"].collidepoint(mouse_pos):
                 if btn["action"] == "randomize":
@@ -644,6 +1036,11 @@ class ChessRobotUI:
                     if self.simulator.state.execution_plan:
                         self.simulator.start_execution(self.simulator.state.execution_plan)
                         print("Execution started")
+                elif btn["action"] == "send_manual":
+                    self.send_manual_command()
+        
+        # Click outside input fields deactivates them
+        self.active_input = None
     
     def handle_key_press(self, key: int):
         """Handle keyboard input"""
@@ -707,6 +1104,7 @@ class ChessRobotUI:
             self.draw_pieces()
             self.draw_ui_buttons()
             self.draw_status()
+            self.draw_manual_command_panel()
             
             pygame.display.flip()
         

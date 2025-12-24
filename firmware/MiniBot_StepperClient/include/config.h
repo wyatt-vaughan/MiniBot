@@ -34,7 +34,11 @@
 #define WHEEL_SPACING_MM     23.3f      // Distance between wheel centers
 
 // Stepper motor configuration
-#define STEPS_PER_REVOLUTION 128.0f     // Total microsteps per revolution
+#define STEPS_PER_REVOLUTION 40.0f     // Total microsteps per revolution. Motors are 20 full steps/rev
+
+// Microstepping config (this is 1/8 when M1 HIGH M2 HIGH)
+#define MSET_STEP_LVL      true      // M0 = HIGH
+#define MSET_DIR_LVL       false     // M1 = LOW
 
 // Motor reversal (set to true to reverse motor direction)
 #define L_WHEEL_REVERSE      false     // Reverse left wheel motor

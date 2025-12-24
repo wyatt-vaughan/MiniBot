@@ -36,6 +36,7 @@ class Piece:
     id: str
     position: Position
     start_position: Optional[Position] = None
+    hex_id: Optional[str] = None  # Hex address (e.g., "00", "01", etc.)
     
     def distance_to(self, other: 'Piece') -> float:
         return self.position.distance_to(other.position)
