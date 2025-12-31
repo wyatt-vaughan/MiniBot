@@ -36,9 +36,9 @@
 // Stepper motor configuration
 #define STEPS_PER_REVOLUTION 40.0f     // Total microsteps per revolution. Motors are 20 full steps/rev
 
-// Microstepping config (this is 1/8 when M1 HIGH M2 HIGH)
-#define MSET_STEP_LVL      true      // M0 = HIGH
-#define MSET_DIR_LVL       false     // M1 = LOW
+// Microstepping config (this is 1/2 when M1 HIGH M2 HIGH)
+#define MSET_STEP_LVL      true
+#define MSET_DIR_LVL       false
 
 // Motor reversal (set to true to reverse motor direction)
 #define L_WHEEL_REVERSE      false     // Reverse left wheel motor
@@ -69,9 +69,9 @@
 // ESP-NOW Network Configuration
 // ============================================================================
 
-#define DEVICE_ID                  0x22     // Unique ID for this robot
+#define DEVICE_ID                  0x02     // Unique ID for this robot
 #define WIFI_CHANNEL               6        // WiFi channel for ESP-NOW
-#define WIFI_POWER                 WIFI_POWER_11dBm  // WiFi TX power
+#define WIFI_POWER                 WIFI_POWER_19_5dBm  // WiFi TX power
 
 // ============================================================================
 // Task Configuration
@@ -82,9 +82,9 @@
 #define KINEMATICS_TASK_STACK_SIZE 8192     // Stack size in words
 
 // FreeRTOS Core0 Config
-#define BATTERY_MONITOR_PRIORITY   3        // Medium priority
-#define LED_STATUS_PRIORITY        3        // Medium priority
+#define BATTERY_MONITOR_PRIORITY    2       // Low priority
+#define LED_STATUS_PRIORITY         2       // Low priority
 #define POSITION_ESTIMATOR_PRIORITY 3       // Medium priority
-#define ESP_NOW_COMM_PRIORITY      4        // Higher priority for comms
+#define ESP_NOW_COMM_PRIORITY       4       // High priority
 
 #endif // __CONFIG_H__

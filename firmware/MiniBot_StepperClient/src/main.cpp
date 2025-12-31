@@ -1,15 +1,5 @@
 /*
-A FreeRTOS powered controller for a 2 wheel robot.
-
-Tasks | Descending priority order:
-- Kinematics Controller (Priority 4) - highest
-- ESP-NOW Communicator (Priority 3)
-- Position Estimator (Priority 2)
-- Battery Monitor (Priority 1)
-- LED Status Indicator (Priority 0) - lowest
-
-More info on each task within their header files.
-
+A FreeRTOS powered controller for a tiny 2 wheel robot.
 */
 
 #include <Arduino.h>
@@ -51,7 +41,7 @@ static bool create_tasks(void) {
     task_created = xTaskCreatePinnedToCore(
         EspNowCommunicator_Task,
         "EspNowCommunicator",
-        2048,
+        8192,
         (void*)&robot,
         3,
         &communicator_task_handle,
@@ -117,36 +107,43 @@ static bool initialize_modules(void) {
         Serial.println("ERROR: Failed to create motion queue");
         return false;
     }
+    Serial.println("✓ Motion queue created successfully");
     
     if (!robot.initialize()) {
         Serial.println("ERROR: Failed to initialize robot");
         return false;
     }
+    Serial.println("✓ Robot initialized successfully");
     
     if (!KinematicsController_Init(motion_queue)) {
         Serial.println("ERROR: Failed to initialize kinematics controller");
         return false;
     }
+    Serial.println("✓ Kinematics controller initialized successfully");
     
     if (!EspNowCommunicator_Init(motion_queue)) {
         Serial.println("ERROR: Failed to initialize ESP-NOW communicator");
         return false;
     }
+    Serial.println("✓ ESP-NOW communicator initialized successfully");
     
     if (!PositionEstimator_Init()) {
         Serial.println("ERROR: Failed to initialize position estimator");
         return false;
     }
+    Serial.println("✓ Position estimator initialized successfully");
     
     if (!BatteryMonitor_Init(0)) {
         Serial.println("ERROR: Failed to initialize battery monitor");
         return false;
     }
+    Serial.println("✓ Battery monitor initialized successfully");
     
     if (!LedStatus_Init(2)) {
         Serial.println("ERROR: Failed to initialize LED status");
         return false;
     }
+    Serial.println("✓ LED status initialized successfully");
     
     return true;
 }

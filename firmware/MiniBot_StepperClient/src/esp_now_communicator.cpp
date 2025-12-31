@@ -14,18 +14,26 @@ bool EspNowCommunicator_Init(MotionQueue* motion_queue) {
     
     comm_queue = motion_queue;
     
+    Serial.println("Setting up WiFi...");
     WiFi.mode(WIFI_STA);
-    WiFi.setTxPower(WIFI_POWER);
-    esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
-    Serial.printf("WiFi started on channel %d\n", WiFi.channel());
-
+    delay(100);
+    Serial.printf("WiFi MAC: %s\n", WiFi.macAddress().c_str());
+    
+    Serial.println("Initializing ESP-NOW...");
     if (esp_now_init() != ESP_OK) {
         Serial.println("ERROR: ESP-NOW initialization failed");
         return false;
     }
+    Serial.println("ESP-NOW initialized successfully");
     
+    // Set channel after ESP-NOW init
+    esp_wifi_set_channel(WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
+    Serial.printf("WiFi channel set to %d\n", WiFi.channel());
+    
+    Serial.println("Registering ESP-NOW callback...");
     esp_now_register_recv_cb(esp_now_recv_cb);
     
+    Serial.println("Adding broadcast peer...");
     esp_now_peer_info_t peer = {};
     memset(&peer, 0, sizeof(esp_now_peer_info_t));
     memset(peer.peer_addr, 0xFF, ESP_NOW_ETH_ALEN);
@@ -35,7 +43,10 @@ bool EspNowCommunicator_Init(MotionQueue* motion_queue) {
         Serial.println("WARNING: Failed to add broadcast peer (may already exist)");
     }
     
+    Serial.println("Registering message handler...");
     EspNowCommunicator_RegisterCallback(esp_now_message_handler);
+    
+    Serial.println("ESP-NOW setup complete");
     return true;
 }
 

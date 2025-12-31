@@ -120,6 +120,12 @@ void Robot::updateTruePosition() {
     // Updates true_x, true_y, and true_theta continuously
 }
 
+void Robot::setTruePose(float x, float y, float theta) {
+    true_x = x;
+    true_y = y;
+    true_theta = theta;
+}
+
 void Robot::updatePositionFromEstimate() {
     positionX = true_x;
     positionY = true_y;

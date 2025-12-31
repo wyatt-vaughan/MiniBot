@@ -138,6 +138,14 @@ public:
     void updateTruePosition();
     
     /**
+     * Set the true position estimate from external source (e.g., magnetic positioning)
+     * @param x X position in mm
+     * @param y Y position in mm
+     * @param theta Orientation in radians
+     */
+    void setTruePose(float x, float y, float theta);
+    
+    /**
      * Copy the true position estimate to the active position
      * This should be called by tasks that need to sync the active position
      * with the latest position estimate (e.g., after motion completion)
