@@ -110,6 +110,7 @@ bool Robot::initialize() {
     
     battery_voltage = 0.0f;
     system_status = 0;
+    is_moving = false;
     
     return true;
 }
@@ -231,6 +232,8 @@ void Robot::executeMotionLoop(int32_t total_steps, float base_step_time_us,
 // ============================================================================
 
 void Robot::setTargetPose(MotionCommand target) {
+    is_moving = true;
+    
     float target_x = target.target_position_x_mm;
     float target_y = target.target_position_y_mm;
     float target_theta = target.target_orientation_rad;
@@ -384,6 +387,7 @@ void Robot::setTargetPose(MotionCommand target) {
     
     left_wheel.disable();
     right_wheel.disable();
+    is_moving = false;
     Serial.printf("Robot::Move complete\n");
     Serial.printf("========================================\n\n");
 }

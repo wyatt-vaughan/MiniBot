@@ -1,4 +1,5 @@
 #include "kinematics_controller.h"
+#include <Arduino.h>
 
 static MotionQueue* kinematics_queue = NULL;
 

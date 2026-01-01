@@ -111,6 +111,9 @@ private:
     
     float battery_voltage;
     uint8_t system_status;
+    
+    // Motion state tracking
+    bool is_moving;
 
     // Motor and motion control constants - initialized from config.h but modifiable
     float steps_per_revolution;
@@ -191,6 +194,12 @@ public:
      * @return Battery voltage in volts
      */
     float getBatteryVoltage() const { return battery_voltage; }
+    
+    /**
+     * Check if robot is currently executing a motion
+     * @return true if moving, false if idle
+     */
+    bool isMoving() const { return is_moving; }
     
     // Motion control configuration getters
     float getStepsPerRevolution() const { return steps_per_revolution; }

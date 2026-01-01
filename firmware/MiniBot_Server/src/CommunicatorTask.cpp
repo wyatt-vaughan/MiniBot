@@ -18,15 +18,30 @@ void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 
 // ESP-NOW callback when data is received
 void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
+  Serial.printf("ESP-NOW data received: %d bytes\n", len);
+  Serial.printf("Expected AckMessage size: %d bytes\n", sizeof(AckMessage));
+  
   if (len == sizeof(AckMessage)) {
     AckMessage ack;
     memcpy(&ack, incomingData, sizeof(ack));
     
+    Serial.printf("Received message - Type: %d, ResponderID: 0x%02X\n", ack.msg_type, ack.responderID);
+    
     // Check if it's an ACK message
     if (ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+      Serial.printf("ACK message detected from robot 0x%02X\n", ack.responderID);
+      Serial.printf("  Position: (%.2f, %.2f) Angle: %.3f rad\n", ack.x, ack.y, ack.orientation_rad);
+      Serial.printf("  Timestamp: %u Battery: %.2fV\n", ack.timestamp, ack.battery_voltage);
+      
       // Send to ACK queue for timeout handling
       if (ackQueue != NULL) {
-        xQueueSend(ackQueue, &ack, 0);
+        if (xQueueSend(ackQueue, &ack, 0) == pdPASS) {
+          Serial.println("  -> Sent to ACK queue");
+        } else {
+          Serial.println("  -> ACK queue full!");
+        }
+      } else {
+        Serial.println("  -> ACK queue is NULL!");
       }
       
       // Also send to status queue for GUI update
@@ -40,9 +55,15 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
       status.batteryVoltage = ack.battery_voltage;
       
       if (xQueueSend(statusQueue, &status, 0) != pdPASS) {
-        Serial.println("Status queue full!");
+        Serial.println("  -> Status queue full!");
+      } else {
+        Serial.println("  -> Sent to status queue for GUI update");
       }
+    } else {
+      Serial.printf("Not an ACK message (type=%d, expected=%d)\n", ack.msg_type, MSG_TYPE_ACK_MESSAGE);
     }
+  } else {
+    Serial.printf("Size mismatch: received %d bytes, expected %d bytes\n", len, sizeof(AckMessage));
   }
 }
 

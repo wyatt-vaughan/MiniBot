@@ -2,6 +2,7 @@
 #include "position_lut.h"
 #include "mmc5633.h"
 #include "config.h"
+#include <Arduino.h>
 #include <Wire.h>
 
 // Electromagnet positioning system timing parameters (all in milliseconds)

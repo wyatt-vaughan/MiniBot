@@ -1,6 +1,7 @@
 #ifndef __ESP_NOW_COMMUNICATOR_H__
 #define __ESP_NOW_COMMUNICATOR_H__
 
+#include <Arduino.h>
 #include "config.h"
 #include "messages_espnow.h"
 #include "motion_queue.h"

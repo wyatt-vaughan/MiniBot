@@ -41,7 +41,7 @@ static bool create_tasks(void) {
     task_created = xTaskCreatePinnedToCore(
         EspNowCommunicator_Task,
         "EspNowCommunicator",
-        8192,
+        2048,
         (void*)&robot,
         3,
         &communicator_task_handle,
@@ -53,20 +53,20 @@ static bool create_tasks(void) {
     }
     Serial.println("✓ ESP-NOW Communicator pinned to Core 0");
     
-    task_created = xTaskCreatePinnedToCore(
-        PositionEstimator_Task,
-        "PositionEstimator",
-        2048,
-        (void*)&robot,
-        2,
-        &position_estimator_task_handle,
-        0
-    );
-    if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create Position Estimator task");
-        return false;
-    }
-    Serial.println("✓ Position Estimator pinned to Core 0");
+    // task_created = xTaskCreatePinnedToCore(
+    //     PositionEstimator_Task,
+    //     "PositionEstimator",
+    //     2048,
+    //     (void*)&robot,
+    //     2,
+    //     &position_estimator_task_handle,
+    //     0
+    // );
+    // if (task_created != pdPASS) {
+    //     Serial.println("ERROR: Failed to create Position Estimator task");
+    //     return false;
+    // }
+    // Serial.println("✓ Position Estimator pinned to Core 0");
     
     task_created = xTaskCreatePinnedToCore(
         BatteryMonitor_Task,
@@ -127,11 +127,11 @@ static bool initialize_modules(void) {
     }
     Serial.println("✓ ESP-NOW communicator initialized successfully");
     
-    if (!PositionEstimator_Init()) {
-        Serial.println("ERROR: Failed to initialize position estimator");
-        return false;
-    }
-    Serial.println("✓ Position estimator initialized successfully");
+    // if (!PositionEstimator_Init()) {
+    //     Serial.println("ERROR: Failed to initialize position estimator");
+    //     return false;
+    // }
+    // Serial.println("✓ Position estimator initialized successfully");
     
     if (!BatteryMonitor_Init(0)) {
         Serial.println("ERROR: Failed to initialize battery monitor");
