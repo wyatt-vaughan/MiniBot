@@ -1,4 +1,5 @@
 #include "esp_now_communicator.h"
+#include "device_id.h"
 
 static MotionQueue* comm_queue = NULL;
 static EspNowReceiveCallback receive_callback = nullptr;
@@ -84,7 +85,7 @@ static bool send_ack_message(const uint8_t *mac_addr) {
     g_robot_ptr->getPosition(&x, &y, &theta);
     
     AckMessage ack = {};
-    ack.responderID = DEVICE_ID;
+    ack.responderID = getDeviceID();
     ack.msg_type = MSG_TYPE_ACK_MESSAGE;
     ack.timestamp = millis();
     ack.x = x;
@@ -120,7 +121,7 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
     uint8_t target_id = data[0];
     uint8_t msg_type = data[1];
     
-    if (target_id != DEVICE_ID) {
+    if (target_id != getDeviceID()) {
         return;
     }
     

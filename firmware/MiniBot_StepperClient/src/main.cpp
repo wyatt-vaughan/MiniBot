@@ -10,6 +10,7 @@ A FreeRTOS powered controller for a tiny 2 wheel robot.
 #include "position_estimator.h"
 #include "battery_monitor.h"
 #include "led_status.h"
+#include "device_id.h"
 
 static Robot robot;
 static MotionQueue* motion_queue = NULL;
@@ -152,6 +153,19 @@ void setup() {
     Serial.begin(115200);
     delay(100);
     Serial.println("\n\n=== MiniBot Stepper Client ===");
+
+    // Write device ID to NVS, ony do this one time. Persistant across reflashes.
+    // This functionality should eventually be wrapped into some other tool.
+    // setDeviceID(0x02);
+    
+    uint8_t device_id = getDeviceID();
+    if (device_id == 0xFF) {
+        Serial.println("WARNING: Device ID not configured!");
+        Serial.println("Set ID by calling: setDeviceID(id) where id is 0x01-0xFE");
+    } else {
+        Serial.printf("Device ID: 0x%02X\n", device_id);
+    }
+    
     Serial.println("Initializing FreeRTOS framework...");
     
     if (!initialize_modules()) {
@@ -174,6 +188,8 @@ void setup() {
     Serial.println("\nAll tasks created successfully");
     Serial.println("Core 0: ESP-NOW, Position Estimator, Battery Monitor, LED Status");
     Serial.println("Core 1: Kinematics Controller");
+
+    setCpuFrequencyMhz(80);
 }
 
 void loop() {

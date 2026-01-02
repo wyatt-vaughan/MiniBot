@@ -69,9 +69,9 @@
 // ESP-NOW Network Configuration
 // ============================================================================
 
-#define DEVICE_ID                  0x02     // Unique ID for this robot
+// Device ID functions are in device_id.h
 #define WIFI_CHANNEL               6        // WiFi channel for ESP-NOW
-#define WIFI_POWER                 WIFI_POWER_19_5dBm  // WiFi TX power
+#define WIFI_POWER                 WIFI_POWER_8_5dBm
 
 // ============================================================================
 // Task Configuration
