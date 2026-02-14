@@ -1,9 +1,9 @@
 #include "kinematics_controller.h"
 #include <Arduino.h>
 
-static MotionQueue* kinematics_queue = NULL;
+static MotionQueue kinematics_queue = NULL;
 
-bool KinematicsController_Init(MotionQueue* motion_queue) {
+bool KinematicsController_Init(MotionQueue motion_queue) {
     if (motion_queue == NULL) {
         return false;
     }
@@ -23,17 +23,10 @@ void KinematicsController_Task(void* pvParameters) {
     MotionCommand cmd_buffer;
     
     while (1) {
-        if (!MotionQueue_IsEmpty(kinematics_queue)) {
-            Serial.println("Kinematics controller task = MESSAGE IS AVAILABLE");
-            if (MotionQueue_Dequeue(kinematics_queue, &cmd_buffer)) {
-                Serial.println("Successfully dequeued motion command");
-                robot->setTargetPose(cmd_buffer);
-            }
-            else {
-                Serial.println("Failed to dequeue motion command");
-            }
+        // Block waiting for a command with 100ms timeout
+        if (MotionQueue_Dequeue(kinematics_queue, &cmd_buffer, 100)) {
+            Serial.println("Kinematics controller: Received motion command");
+            robot->setTargetPose(cmd_buffer);
         }
-        
-        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }

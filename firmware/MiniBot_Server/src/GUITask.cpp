@@ -1,5 +1,6 @@
 #include "GUITask.h"
 #include "QueueStructs.h"
+#include "ElectromagnetTask.h"
 
 // Web Server
 AsyncWebServer server(80);
@@ -20,7 +21,7 @@ const char index_html[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body { font-family: Arial; margin: 10px; background-color: #1a1a1a; color: #fff; }
-    h1 { text-align: center; color: #4CAF50; }
+    h1 { text-align: center; color: #3e8bcaff; }
     .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 10px; margin: 20px auto; max-width: 2400px; }
     .cell { background: #2a2a2a; border: 2px solid #444; border-radius: 8px; padding: 10px; }
     .cell-header { background: #3a3a3a; padding: 5px; margin: -10px -10px 10px -10px; border-radius: 6px 6px 0 0; text-align: center; font-weight: bold; }
@@ -34,15 +35,36 @@ const char index_html[] PROGMEM = R"rawliteral(
     .status div { margin: 3px 0; }
     .status-label { color: #888; }
     .status-value { color: #4CAF50; font-weight: bold; }
-    .status-error { color: #ff5555; font-weight: bold; }
+    .status-error { color: #c54a4aff; font-weight: bold; }
     .btn-request { background: #2196F3; margin-top: 5px; }
     .btn-request:hover { background: #1976D2; }
     .btn-request:active { background: #1565C0; }
     input[type="text"]:focus, input[type="number"]:focus { outline: none; border-color: #4CAF50; }
+    .control-panel { background: #2a2a2a; border: 2px solid #444; border-radius: 8px; padding: 15px; margin: 20px auto; max-width: 2400px; }
+    .switch { position: relative; display: inline-block; width: 60px; height: 34px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px; }
+    .slider:before { position: absolute; content: ""; height: 26px; width: 26px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
+    input:checked + .slider { background-color: #4CAF50; }
+    input:checked + .slider:before { transform: translateX(26px); }
+    .control-row { display: flex; align-items: center; margin: 10px 0; }
+    .control-label { margin-right: 15px; font-size: 16px; min-width: 200px; }
   </style>
 </head>
 <body>
-  <h1>MiniBot Server Controller</h1>
+  <h1>ChessBot Debug Controller</h1>
+  
+  <div class="control-panel">
+    <div class="control-row">
+      <span class="control-label">Electromagnet Control:</span>
+      <label class="switch">
+        <input type="checkbox" id="emagToggle" onchange="toggleElectromagnet()">
+        <span class="slider"></span>
+      </label>
+      <span id="emagStatus" style="margin-left: 15px; color: #888;">OFF</span>
+    </div>
+  </div>
+  
   <div class="grid" id="robotGrid"></div>
 
   <script>
@@ -91,6 +113,16 @@ const char index_html[] PROGMEM = R"rawliteral(
       console.log('Position request: ' + message);
     }
 
+    function toggleElectromagnet() {
+      var enabled = document.getElementById('emagToggle').checked;
+      var message = 'emag,' + (enabled ? '1' : '0');
+      websocket.send(message);
+      document.getElementById('emagStatus').innerHTML = enabled ? 
+        '<span style="color: #4CAF50;">ON</span>' : 
+        '<span style="color: #888;">OFF</span>';
+      console.log('Electromagnet: ' + message);
+    }
+
     function updateStatus(id) {
       var data = robotData[id];
       if (data) {
@@ -118,7 +150,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
     function createGrid() {
       var grid = document.getElementById('robotGrid');
-      for (var i = 0; i < 36; i++) {
+      for (var i = 1; i < 37; i++) {
         var cell = document.createElement('div');
         cell.className = 'cell';
         
@@ -131,11 +163,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             <input type="text" id="tid_${i}" value="${hexId}">
           </div>
           <div class="input-group">
-            <label>X Target (m):</label>
+            <label>X Target (mm):</label>
             <input type="number" id="x_${i}" value="0.0" step="1">
           </div>
           <div class="input-group">
-            <label>Y Target (m):</label>
+            <label>Y Target (mm):</label>
             <input type="number" id="y_${i}" value="0.0" step="1">
           </div>
           <div class="input-group">
@@ -246,6 +278,11 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         } else {
           Serial.println("Command queue full!");
         }
+      } else if (message.startsWith("emag,")) {
+        // Parse electromagnet control: format "emag,0" or "emag,1"
+        int enabled = message.substring(5).toInt();
+        setElectromagnetEnabled(enabled == 1);
+        Serial.printf("Electromagnet control set to: %s\n", enabled ? "ENABLED" : "DISABLED");
       }
     }
   }
@@ -285,7 +322,7 @@ void guiTask(void *parameter) {
   
   while (1) {
     // Check for status updates from communicator
-    if (xQueueReceive(statusQueue, &status, pdMS_TO_TICKS(10)) == pdPASS) {
+    if (xQueueReceive(guiStatusQueue, &status, pdMS_TO_TICKS(10)) == pdPASS) {
       // Update robot status array
       if (status.targetID < 36) {
         robotStatus[status.targetID] = status;

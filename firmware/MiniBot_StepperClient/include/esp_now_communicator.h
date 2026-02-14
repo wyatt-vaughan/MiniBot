@@ -34,10 +34,10 @@ void EspNowCommunicator_Task(void* pvParameters);
  * Initialize the ESP-NOW communicator
  * Should be called before starting the task
  * 
- * @param motion_queue Pointer to MotionQueue
+ * @param motion_queue MotionQueue handle
  * @return true on success, false on failure
  */
-bool EspNowCommunicator_Init(MotionQueue* motion_queue);
+bool EspNowCommunicator_Init(MotionQueue motion_queue);
 
 /**
  * Register a callback function to be called when broadcast messages are received

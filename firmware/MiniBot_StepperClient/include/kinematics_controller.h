@@ -22,9 +22,9 @@ void KinematicsController_Task(void* pvParameters);
  * Initialize the kinematics controller
  * Should be called before starting the task
  * 
- * @param motion_queue Pointer to MotionQueue
+ * @param motion_queue MotionQueue handle
  * @return true on success, false on failure
  */
-bool KinematicsController_Init(MotionQueue* motion_queue);
+bool KinematicsController_Init(MotionQueue motion_queue);
 
 #endif // __KINEMATICS_CONTROLLER_H__

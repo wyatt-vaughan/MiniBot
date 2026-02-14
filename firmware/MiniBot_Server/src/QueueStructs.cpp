@@ -3,15 +3,27 @@
 
 // Queue handle definitions
 QueueHandle_t commandQueue = NULL;
-QueueHandle_t statusQueue = NULL;
+QueueHandle_t guiStatusQueue = NULL;
+QueueHandle_t pythonStatusQueue = NULL;
+QueueHandle_t i2cStatusQueue = NULL;
 
 void initQueues() {
   commandQueue = xQueueCreate(10, sizeof(GUICommand));
-  statusQueue = xQueueCreate(20, sizeof(GUIStatus));
+  guiStatusQueue = xQueueCreate(20, sizeof(GUIStatus));
+  pythonStatusQueue = xQueueCreate(20, sizeof(GUIStatus));
+  i2cStatusQueue = xQueueCreate(20, sizeof(GUIStatus));
   
-  if (commandQueue == NULL || statusQueue == NULL) {
+  if (commandQueue == NULL || guiStatusQueue == NULL || 
+      pythonStatusQueue == NULL || i2cStatusQueue == NULL) {
     Serial.println("Failed to create queues!");
   } else {
     Serial.println("Queues created successfully");
   }
+}
+
+// Broadcast status to all communication tasks
+void broadcastStatus(const GUIStatus& status) {
+  xQueueSend(guiStatusQueue, &status, 0);
+  xQueueSend(pythonStatusQueue, &status, 0);
+  xQueueSend(i2cStatusQueue, &status, 0);
 }

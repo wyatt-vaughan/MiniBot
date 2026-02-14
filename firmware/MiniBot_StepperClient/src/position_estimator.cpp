@@ -50,9 +50,9 @@ enum PulseDetectState {
 #define PULSE_OFF_MAX_MS             4
 
 static MMC5633NJL mag;
-static RollingAverage<200> avgX;
-static RollingAverage<200> avgY;
-static RollingAverage<200> avgZ;
+static RollingAverage<50> avgX;
+static RollingAverage<50> avgY;
+static RollingAverage<50> avgZ;
 static bool mag_initialized = false;
 
 static EmagReading emag_readings[EMAG_COUNT];
@@ -224,6 +224,7 @@ static bool detectStartPulse(float mx, float my, float mz, uint32_t current_time
 }
 
 void PositionEstimator_Task(void* pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(100));
     Robot* robot = (Robot*)pvParameters;
     
     if (robot == NULL) {
@@ -243,6 +244,8 @@ void PositionEstimator_Task(void* pvParameters) {
         
         if ((current_micros - last_sample_time) >= EMAG_SAMPLE_PERIOD_US) {
             last_sample_time = current_micros;
+
+            // Serial.printf("mag_init: %d, state: %d, elapsed: %lu ms\n", mag_initialized, current_state, elapsed_ms);
             
             if (mag_initialized && mag.readMeasurement()) {
                 float mx = mag.getFieldGaussX();
@@ -254,6 +257,9 @@ void PositionEstimator_Task(void* pvParameters) {
                         avgX.add(mx);
                         avgY.add(my);
                         avgZ.add(mz);
+
+                        Serial.printf("mx: %.2f\tmy: %.2f\tmz: %.2f\n", mx, my, mz);
+                        // Serial.printf("avgx: %.2f, avgy: %.2f, avgz: %.2f\n", avgX.avg(), avgY.avg(), avgZ.avg());
                         
                         if (detectStartPulse(mx, my, mz, current_time)) {
                             current_state = STATE_WAITING_PAUSE;
@@ -310,6 +316,6 @@ void PositionEstimator_Task(void* pvParameters) {
             }
         }
         
-        delayMicroseconds(100);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }

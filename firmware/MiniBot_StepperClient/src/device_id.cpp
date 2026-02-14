@@ -28,6 +28,9 @@ static void openNVShandle(nvs_handle_t* my_handle)
 }
 
 uint8_t getDeviceID() {
+    if (cached_device_id != 0xFF) {
+        return cached_device_id;
+    }
     ensureNVSInitialized();
     nvs_handle_t nvshandle;
     openNVShandle(&nvshandle);
@@ -45,6 +48,7 @@ uint8_t getDeviceID() {
             Serial.printf("Error (%s) reading!\n", esp_err_to_name(err));
     }
     nvs_close(nvshandle);
+    cached_device_id = (uint8_t)dev_id;
     return (uint8_t)dev_id;
 }
 

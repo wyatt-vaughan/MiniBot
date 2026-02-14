@@ -44,7 +44,7 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
         Serial.println("  -> ACK queue is NULL!");
       }
       
-      // Also send to status queue for GUI update
+      // Also send to all status queues for GUI/Python/I2C update
       GUIStatus status;
       status.targetID = ack.responderID;
       status.ackReceived = true;
@@ -54,11 +54,8 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
       status.timestamp = ack.timestamp;
       status.batteryVoltage = ack.battery_voltage;
       
-      if (xQueueSend(statusQueue, &status, 0) != pdPASS) {
-        Serial.println("  -> Status queue full!");
-      } else {
-        Serial.println("  -> Sent to status queue for GUI update");
-      }
+      broadcastStatus(status);
+      Serial.println("  -> Broadcast to all status queues");
     } else {
       Serial.printf("Not an ACK message (type=%d, expected=%d)\n", ack.msg_type, MSG_TYPE_ACK_MESSAGE);
     }
@@ -145,7 +142,7 @@ void communicatorTask(void *parameter) {
           
           if (!ackReceived) {
             Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd.targetID);
-            // Send timeout notification to GUI
+            // Send timeout notification to all tasks
             GUIStatus status;
             status.targetID = cmd.targetID;
             status.ackReceived = false;
@@ -154,7 +151,7 @@ void communicatorTask(void *parameter) {
             status.currentAngle = 0;
             status.timestamp = 0;
             status.batteryVoltage = 0;
-            xQueueSend(statusQueue, &status, 0);
+            broadcastStatus(status);
           }
         } else {
           Serial.printf("Error sending position request: %d\n", result);
@@ -203,7 +200,7 @@ void communicatorTask(void *parameter) {
           
           if (!ackReceived) {
             Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd.targetID);
-            // Send timeout notification to GUI
+            // Send timeout notification to all tasks
             GUIStatus status;
             status.targetID = cmd.targetID;
             status.ackReceived = false;
@@ -212,7 +209,7 @@ void communicatorTask(void *parameter) {
             status.currentAngle = 0;
             status.timestamp = 0;
             status.batteryVoltage = 0;
-            xQueueSend(statusQueue, &status, 0);
+            broadcastStatus(status);
           }
         } else {
           Serial.printf("Error sending position command: %d\n", result);

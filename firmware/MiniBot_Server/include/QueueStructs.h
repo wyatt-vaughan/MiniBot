@@ -26,8 +26,13 @@ struct GUIStatus {
 };
 
 // Queue handles
-extern QueueHandle_t commandQueue;  // GUI -> Communicator
-extern QueueHandle_t statusQueue;   // Communicator -> GUI
+extern QueueHandle_t commandQueue;     // All tasks -> Communicator
+extern QueueHandle_t guiStatusQueue;   // Communicator -> GUI
+extern QueueHandle_t pythonStatusQueue; // Communicator -> Python
+extern QueueHandle_t i2cStatusQueue;   // Communicator -> I2C
+
+// Broadcast status to all communication tasks
+void broadcastStatus(const GUIStatus& status);
 
 // Initialize queues
 void initQueues();

@@ -9,6 +9,13 @@
 #include <stdbool.h>
 #include <functional>
 
+enum class MotionType {
+    NONE,
+    ROTATION_ONLY,
+    STRAIGHT_LINE,
+    ARC_THEN_ROTATE
+};
+
 /**
  * Stepper driver for controlling individual stepper motors
  */
@@ -92,6 +99,19 @@ public:
         float accel_time_s;
         float accel_phase_ms;
         bool full_profile;
+    };
+    
+    // Wheel motion profile for individual wheel control
+    struct WheelMotion {
+        float distance_mm;
+        float max_velocity_mm_s;
+        float accel_mm_s2;
+        int32_t total_steps;
+        bool forward;
+        float total_time_s;
+        float accel_time_s;
+        float cruise_time_s;
+        bool is_triangular;
     };
 
 private:
@@ -218,6 +238,7 @@ public:
     void setStepperMaxVelocity(float vel) { stepper_max_velocity_mm_s = vel; }
     
 private:
+    // Legacy motion profile (still used by executeMotionLoop)
     MotionProfile calculateMotionProfile(float distance_mm, float max_velocity_mm_s);
     
     float calculateVelocityAtTime(float elapsed_ms, float remaining_ms, float accel_phase_ms,
@@ -230,13 +251,14 @@ private:
                            TickType_t start_tick, TickType_t target_end_tick,
                            std::function<void(int32_t)> step_callback);
     
-    void executeRotationMotion(float angle_rad, float steps_per_mm, float move_duration_ms);
+    // New motion execution methods
+    void executeRotation(float angle_rad, float target_time_s);
+    void executeStraightLine(float distance_mm, float target_time_s);
+    void executeArcToPosition(float dx, float dy, float current_theta, 
+                               float target_time_s, float final_angle_delta);
     
-    void executeStraightMotion(float distance, float steps_per_mm, float max_velocity,
-                               TickType_t start_tick, TickType_t end_tick, bool move_backward = false);
-    
-    void executeArcMotion(float dx, float dy, float linear_distance, float orientation_delta,
-                          float steps_per_mm, float max_velocity, TickType_t start_tick, TickType_t end_tick);
+    // Helper to integrate wheel distance from motion profile
+    float integrateDistance(const WheelMotion& m, float t);
     
 public:
     /**

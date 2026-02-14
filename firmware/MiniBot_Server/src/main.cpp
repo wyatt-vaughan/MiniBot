@@ -3,6 +3,9 @@
 #include "GUITask.h"
 #include "CommunicatorTask.h"
 #include "QueueStructs.h"
+#include "ElectromagnetTask.h"
+#include "PythonCommTask.h"
+#include "I2CCommTask.h"
 
 // WiFi Configuration
 const char* ssid = "ChessBot-Server";
@@ -23,35 +26,24 @@ void setup() {
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(local_IP, gateway, subnet);
   WiFi.softAP(ssid, password, wifiChannel);
-  // WiFi.begin(ssid, password);
 
   Serial.print("AP IP address: ");
   Serial.println(WiFi.softAPIP());
-  
-  // Serial.print("Connecting to WiFi");
-  // int attempts = 0;
-  // while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-  //   delay(500);
-  //   Serial.print(".");
-  //   attempts++;
-  // }
-  
-  // if (WiFi.status() == WL_CONNECTED) {
-  //   Serial.println("\nWiFi connected!");
-  //   Serial.print("IP Address: ");
-  //   Serial.println(WiFi.localIP());
-  // } else {
-  //   Serial.println("\nWiFi connection failed, starting AP mode");
-  //   WiFi.softAP("MiniBot-Server", "12345678");
-  //   Serial.print("AP IP Address: ");
-  //   Serial.println(WiFi.softAPIP());
-  // }
   
   // Initialize ESP-NOW
   initESPNow();
   
   // Initialize GUI
   initGUI();
+  
+  // Initialize Electromagnets
+  initElectromagnets();
+  
+  // Initialize Python Serial communication
+  initPythonComm();
+  
+  // Initialize I2C communication
+  initI2CComm();
   
   // Create FreeRTOS Tasks
   xTaskCreatePinnedToCore(
@@ -74,7 +66,36 @@ void setup() {
     0                  // Core (0 or 1)
   );
   
-  Serial.println("FreeRTOS tasks created");
+  xTaskCreatePinnedToCore(
+    electromagnetTask, // Task function
+    "Emag Task",       // Task name
+    2048,              // Stack size (bytes)
+    NULL,              // Parameter
+    1,                 // Priority (lower than comm/gui)
+    &emagTaskHandle,   // Task handle
+    0                  // Core (0 or 1)
+  );
+  
+  xTaskCreatePinnedToCore(
+    pythonCommTask,    // Task function
+    "Python Task",     // Task name
+    4096,              // Stack size (bytes)
+    NULL,              // Parameter
+    2,                 // Priority
+    &pythonCommTaskHandle, // Task handle
+    1                  // Core (0 or 1)
+  );
+  
+  xTaskCreatePinnedToCore(
+    i2cCommTask,       // Task function
+    "I2C Task",        // Task name
+    4096,              // Stack size (bytes)
+    NULL,              // Parameter
+    2,                 // Priority
+    &i2cCommTaskHandle, // Task handle
+    0                  // Core (0 or 1)
+  );
+  
   Serial.println("Setup complete!");
 }
 

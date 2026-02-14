@@ -36,13 +36,16 @@
 // Stepper motor configuration
 #define STEPS_PER_REVOLUTION 40.0f     // Total microsteps per revolution. Motors are 20 full steps/rev
 
-// Microstepping config (this is 1/2 when M1 HIGH M2 HIGH)
+// Microstepping config
+    // STSPIN220 microstepping table (MS1=HIGH, MS2=LOW hardwired):
+    // STEP=0 DIR=0 -> 1/128, STEP=0 DIR=1 -> 1/256
+    // STEP=1 DIR=0 -> 1/2, STEP=1 DIR=1 -> 1/8
 #define MSET_STEP_LVL      true
 #define MSET_DIR_LVL       false
 
 // Motor reversal (set to true to reverse motor direction)
-#define L_WHEEL_REVERSE      false     // Reverse left wheel motor
-#define R_WHEEL_REVERSE      false     // Reverse right wheel motor
+#define L_WHEEL_REVERSE      false
+#define R_WHEEL_REVERSE      false
 
 // ============================================================================
 // Motion Control Limits
@@ -58,6 +61,10 @@
 
 // Stepper motor safety limit
 #define STEPPER_MAX_VELOCITY_MM_S  200.0f   // Stepper motor maximum velocity
+
+#define POSITION_TOLERANCE_MM 2.0f          // Position error tolerance
+#define ANGLE_TOLERANCE_RAD 0.05f           // ~3 degrees angle tolerance
+#define MIN_ARC_RADIUS_MM 5.0f              // Minimum arc radius before fallback
 
 // ============================================================================
 // Motion Queue Configuration
@@ -86,5 +93,11 @@
 #define LED_STATUS_PRIORITY         2       // Low priority
 #define POSITION_ESTIMATOR_PRIORITY 3       // Medium priority
 #define ESP_NOW_COMM_PRIORITY       4       // High priority
+
+// ============================================================================
+// Debug Configuration
+// ============================================================================
+
+#define MOTION_DEBUG_LOGGING        true    // Enable detailed motion control debug output
 
 #endif // __CONFIG_H__

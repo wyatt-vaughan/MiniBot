@@ -1,7 +1,7 @@
 #include "esp_now_communicator.h"
 #include "device_id.h"
 
-static MotionQueue* comm_queue = NULL;
+static MotionQueue comm_queue = NULL;
 static EspNowReceiveCallback receive_callback = nullptr;
 static Robot* g_robot_ptr = NULL;
 static uint8_t last_sender_mac[6] = {0};
@@ -13,7 +13,7 @@ static bool ensure_peer_exists(const uint8_t *mac_addr);
 static bool send_ack_message(const uint8_t *mac_addr);
 static void send_completion_ack_if_pending();
 
-bool EspNowCommunicator_Init(MotionQueue* motion_queue) {
+bool EspNowCommunicator_Init(MotionQueue motion_queue) {
     if (motion_queue == NULL) {
         return false;
     }
@@ -134,12 +134,11 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
             
             PositionCommand* cmd = (PositionCommand*)data;
             
-            MotionCommand motion_cmd = MotionCommand{
+            MotionCommand motion_cmd = {
                 cmd->target_x_mm,
                 cmd->target_y_mm,
                 cmd->target_a_rad,
-                cmd->move_duration_ms,
-                NULL
+                cmd->move_duration_ms
             };
             
             if (MotionQueue_Enqueue(comm_queue, &motion_cmd)) {
