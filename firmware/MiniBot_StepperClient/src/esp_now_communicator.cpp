@@ -1,5 +1,6 @@
 #include "esp_now_communicator.h"
 #include "device_id.h"
+#include "position_estimator.h"
 
 static MotionQueue comm_queue = NULL;
 static EspNowReceiveCallback receive_callback = nullptr;
@@ -105,6 +106,63 @@ static bool send_ack_message(const uint8_t *mac_addr) {
     return true;
 }
 
+static bool send_nack_message(const uint8_t *mac_addr, const uint8_t error_type) {
+    if (mac_addr == NULL || g_robot_ptr == NULL) {
+        return false;
+    }
+    
+    float x, y, theta;
+    g_robot_ptr->getPosition(&x, &y, &theta);
+    
+    NackMessage nack = {};
+    nack.responderID = getDeviceID();
+    nack.msg_type = MSG_TYPE_NACK_MESSAGE;
+    nack.timestamp = millis();
+    nack.err_type = error_type;
+    
+    if (!ensure_peer_exists(mac_addr)) {
+        return false;
+    }
+    
+    esp_err_t result = esp_now_send(mac_addr, (uint8_t*)&nack, sizeof(NackMessage));
+    if (result != ESP_OK) {
+        Serial.printf("ERROR: Failed to send nack (err: %d)\n", result);
+        return false;
+    }
+    return true;
+}
+
+static bool send_mag_field_response(const uint8_t *mac_addr) {
+    if (mac_addr == NULL) {
+        return false;
+    }
+    
+    float x, y, z;
+    if (!PositionEstimator_GetLatestMagneticField(&x, &y, &z)) {
+        Serial.println("ERROR: Could not retrieve magnetometer readings");
+        return send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
+    }
+    
+    MagneticFieldResponse response = {};
+    response.responderID = getDeviceID();
+    response.msg_type = MSG_TYPE_MAG_REQUEST;
+    response.timestamp = millis();
+    response.field_x_gauss = x;
+    response.field_y_gauss = y;
+    response.field_z_gauss = z;
+    
+    if (!ensure_peer_exists(mac_addr)) {
+        return false;
+    }
+    
+    esp_err_t result = esp_now_send(mac_addr, (uint8_t*)&response, sizeof(MagneticFieldResponse));
+    if (result != ESP_OK) {
+        Serial.printf("ERROR: Failed to send mag field response (err: %d)\n", result);
+        return false;
+    }
+    return true;
+}
+
 static void send_completion_ack_if_pending() {
     if (has_pending_completion_ack) {
         Serial.println("Sending motion completion acknowledgment");
@@ -129,6 +187,7 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
         case MSG_TYPE_POSITION_COMMAND: {
             if (len < sizeof(PositionCommand)) {
                 Serial.printf("ERROR: PositionCommand too short\n");
+                send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
             
@@ -145,10 +204,10 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 // Store sender MAC for completion ack
                 memcpy(last_sender_mac, mac_addr, 6);
                 has_pending_completion_ack = true;
-                // Send immediate acknowledgment that command was received
                 send_ack_message(mac_addr);
             } else {
                 Serial.println("ERROR: Motion queue full");
+                send_nack_message(mac_addr, ERR_QUEUE_FULL);
             }
             break;
         }
@@ -158,18 +217,21 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 Serial.println("ERROR: MotTestCommand too short");
                 return;
             }
-            // Not yet implemented
+            Serial.println("Received motor test command");
+            send_nack_message(mac_addr, ERR_NOT_IMPLEMENTED);
             break;
         }
         
         case MSG_TYPE_POSITION_REQUEST: {
             if (len < sizeof(PositionRequest)) {
                 Serial.println("ERROR: PositionRequest too short");
+                send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
             
             if (g_robot_ptr == NULL) {
                 Serial.println("ERROR: Robot pointer unavailable");
+                send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
                 return;
             }
             
@@ -180,13 +242,27 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
         case MSG_TYPE_ACK_MESSAGE: {
             if (len < sizeof(AckMessage)) {
                 Serial.println("ERROR: AckMessage too short");
+                send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
-            // Not yet implemented
+            Serial.println("Received acknowledgment message");
+            send_nack_message(mac_addr, ERR_NOT_IMPLEMENTED);
+            break;
+        }
+        
+        case MSG_TYPE_MAG_REQUEST: {
+            if (len < sizeof(MagneticFieldRequest)) {
+                Serial.println("ERROR: MagneticFieldRequest too short");
+                send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
+                return;
+            }
+            Serial.println("Received magnetometer field request");
+            send_mag_field_response(mac_addr);
             break;
         }
         
         default:
+            send_nack_message(mac_addr, ERR_UNKNOWN_MSG);
             break;
     }
 }
@@ -194,6 +270,25 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
 bool EspNowCommunicator_RegisterCallback(EspNowReceiveCallback callback) {
     receive_callback = callback;
     return true;
+}
+
+bool EspNowCommunicator_SendAlert(uint8_t error_type) {
+    // Only send alert if we have a valid last sender
+    // Check if the MAC address is not all zeros
+    bool has_valid_sender = false;
+    for (int i = 0; i < 6; i++) {
+        if (last_sender_mac[i] != 0) {
+            has_valid_sender = true;
+            break;
+        }
+    }
+    
+    if (!has_valid_sender) {
+        Serial.println("WARNING: No valid sender MAC for alert");
+        return false;
+    }
+    
+    return send_nack_message(last_sender_mac, error_type);
 }
 
 void EspNowCommunicator_Task(void* pvParameters) {

@@ -47,4 +47,13 @@ bool EspNowCommunicator_Init(MotionQueue motion_queue);
  */
 bool EspNowCommunicator_RegisterCallback(EspNowReceiveCallback callback);
 
+/**
+ * Send an alert NACK message to the last known sender with the specified error type
+ * Can be used for low battery, critical systems errors, or any other alert condition
+ * 
+ * @param error_type The error type to send (from EspNowErrorType enum or custom values)
+ * @return true on success, false on failure
+ */
+bool EspNowCommunicator_SendAlert(uint8_t error_type);
+
 #endif // __ESP_NOW_COMMUNICATOR_H__

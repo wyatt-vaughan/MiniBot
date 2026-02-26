@@ -65,7 +65,7 @@ static void processI2CCommand() {
       // Format: [msgType, targetID, x(4), y(4), angle(4), duration(4)]
       if (i2cRxLength >= 18) {
         GUICommand cmd;
-        cmd.isPositionRequest = false;
+        cmd.requestType = 0;  // Position command
         cmd.targetID = i2cRxBuffer[1];
         memcpy(&cmd.x, &i2cRxBuffer[2], 4);
         memcpy(&cmd.y, &i2cRxBuffer[6], 4);
@@ -87,7 +87,7 @@ static void processI2CCommand() {
       // Format: [msgType, targetID]
       if (i2cRxLength >= 2) {
         GUICommand cmd;
-        cmd.isPositionRequest = true;
+        cmd.requestType = 1;  // Position request
         cmd.targetID = i2cRxBuffer[1];
         cmd.x = 0;
         cmd.y = 0;

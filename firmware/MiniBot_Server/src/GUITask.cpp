@@ -113,6 +113,13 @@ const char index_html[] PROGMEM = R"rawliteral(
       console.log('Position request: ' + message);
     }
 
+    function requestMagnetField(id) {
+      var targetId = document.getElementById('tid_' + id).value;
+      var message = 'mag,' + targetId;
+      websocket.send(message);
+      console.log('Magnet field request: ' + message);
+    }
+
     function toggleElectromagnet() {
       var enabled = document.getElementById('emagToggle').checked;
       var message = 'emag,' + (enabled ? '1' : '0');
@@ -126,6 +133,14 @@ const char index_html[] PROGMEM = R"rawliteral(
     function updateStatus(id) {
       var data = robotData[id];
       if (data) {
+        if (data.magValid) {
+          document.getElementById('mag_' + id).innerHTML = 
+            'Magnet: <span class="status-value">[' + data.magX.toFixed(2) + ', ' + data.magY.toFixed(2) + ', ' + data.magZ.toFixed(2) + ']</span>';
+        } else {
+          document.getElementById('mag_' + id).innerHTML = 
+            'Magnet: <span class="status-label">--</span>';
+        }
+        
         if (data.ack === false) {
           document.getElementById('pos_' + id).innerHTML = 
             'Position: <span class="status-error">NO ACK</span>';
@@ -180,7 +195,9 @@ const char index_html[] PROGMEM = R"rawliteral(
           </div>
           <button onclick="sendCommand(${i})">SEND</button>
           <button class="btn-request" onclick="requestPosition(${i})">REQUEST POSE</button>
+          <button class="btn-request" onclick="requestMagnetField(${i})">REQUEST MAGNET</button>
           <div class="status">
+            <div id="mag_${i}" class="status-label">Magnet: --</div>
             <div id="pos_${i}" class="status-label">Position: --</div>
             <div id="ang_${i}" class="status-label">Angle: --</div>
             <div id="ts_${i}" class="status-label">Last Update: --</div>
@@ -189,7 +206,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         `;
         
         grid.appendChild(cell);
-        robotData[i] = {id: i, x: 0, y: 0, angle: 0, ts: 0, batt: 0, ack: true};
+        robotData[i] = {id: i, x: 0, y: 0, angle: 0, ts: 0, batt: 0, ack: true, magX: 0, magY: 0, magZ: 0, magValid: false};
       }
     }
 
@@ -223,7 +240,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
       if (message.startsWith("cmd,")) {
         // Parse command: format "cmd,id,x,y,angle,duration"
         GUICommand cmd;
-        cmd.isPositionRequest = false;
+        cmd.requestType = 0;  // Position command
         
         int idx1 = message.indexOf(',', 4);  // After "cmd,"
         int idx2 = message.indexOf(',', idx1 + 1);
@@ -257,7 +274,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
       } else if (message.startsWith("req,")) {
         // Parse request: format "req,id"
         GUICommand cmd;
-        cmd.isPositionRequest = true;
+        cmd.requestType = 1;  // Position request
         
         String targetIdStr = message.substring(4);
         // Parse hex string (e.g., "0x05" or "5")
@@ -275,6 +292,30 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         // Send to command queue
         if (xQueueSend(commandQueue, &cmd, 0) == pdPASS) {
           Serial.printf("Position request queued for robot 0x%02X\n", cmd.targetID);
+        } else {
+          Serial.println("Command queue full!");
+        }
+      } else if (message.startsWith("mag,")) {
+        // Parse magnet field request: format "mag,id"
+        GUICommand cmd;
+        cmd.requestType = 2;  // Magnet field request
+        
+        String targetIdStr = message.substring(4);
+        // Parse hex string (e.g., "0x05" or "5")
+        if (targetIdStr.startsWith("0x") || targetIdStr.startsWith("0X")) {
+          cmd.targetID = (uint8_t)strtol(targetIdStr.c_str(), NULL, 16);
+        } else {
+          cmd.targetID = targetIdStr.toInt();
+        }
+        
+        cmd.x = 0;
+        cmd.y = 0;
+        cmd.angle = 0;
+        cmd.duration = 0;
+        
+        // Send to command queue
+        if (xQueueSend(commandQueue, &cmd, 0) == pdPASS) {
+          Serial.printf("Magnet field request queued for robot 0x%02X\n", cmd.targetID);
         } else {
           Serial.println("Command queue full!");
         }
@@ -299,6 +340,10 @@ void initGUI() {
     robotStatus[i].currentAngle = 0.0;
     robotStatus[i].timestamp = 0;
     robotStatus[i].batteryVoltage = 0.0;
+    robotStatus[i].magnetX_gauss = 0.0;
+    robotStatus[i].magnetY_gauss = 0.0;
+    robotStatus[i].magnetZ_gauss = 0.0;
+    robotStatus[i].magnetFieldValid = false;
   }
   
   // Setup WebSocket
@@ -325,18 +370,36 @@ void guiTask(void *parameter) {
     if (xQueueReceive(guiStatusQueue, &status, pdMS_TO_TICKS(10)) == pdPASS) {
       // Update robot status array
       if (status.targetID < 36) {
-        robotStatus[status.targetID] = status;
+        // Preserve battery voltage if sentinel value (-1.0f) is used
+        if (status.batteryVoltage >= 0.0f) {
+          robotStatus[status.targetID].batteryVoltage = status.batteryVoltage;
+        }
+        // Update other fields
+        robotStatus[status.targetID].targetID = status.targetID;
+        robotStatus[status.targetID].ackReceived = status.ackReceived;
+        robotStatus[status.targetID].currentX = status.currentX;
+        robotStatus[status.targetID].currentY = status.currentY;
+        robotStatus[status.targetID].currentAngle = status.currentAngle;
+        robotStatus[status.targetID].timestamp = status.timestamp;
+        robotStatus[status.targetID].magnetX_gauss = status.magnetX_gauss;
+        robotStatus[status.targetID].magnetY_gauss = status.magnetY_gauss;
+        robotStatus[status.targetID].magnetZ_gauss = status.magnetZ_gauss;
+        robotStatus[status.targetID].magnetFieldValid = status.magnetFieldValid;
         
         // Only send if we have connected clients and queue isn't full
         if (ws.count() > 0) {
           // Broadcast to all WebSocket clients
           String json = "{\"id\":" + String(status.targetID) + 
-                       ",\"x\":" + String(status.currentX, 2) +
-                       ",\"y\":" + String(status.currentY, 2) +
-                       ",\"angle\":" + String(status.currentAngle, 3) +
-                       ",\"ts\":" + String(status.timestamp) +
-                       ",\"batt\":" + String(status.batteryVoltage, 2) +
-                       ",\"ack\":" + String(status.ackReceived ? "true" : "false") + "}";
+                       ",\"x\":" + String(robotStatus[status.targetID].currentX, 2) +
+                       ",\"y\":" + String(robotStatus[status.targetID].currentY, 2) +
+                       ",\"angle\":" + String(robotStatus[status.targetID].currentAngle, 3) +
+                       ",\"ts\":" + String(robotStatus[status.targetID].timestamp) +
+                       ",\"batt\":" + String(robotStatus[status.targetID].batteryVoltage, 2) +
+                       ",\"ack\":" + String(robotStatus[status.targetID].ackReceived ? "true" : "false") +
+                       ",\"magX\":" + String(robotStatus[status.targetID].magnetX_gauss, 2) +
+                       ",\"magY\":" + String(robotStatus[status.targetID].magnetY_gauss, 2) +
+                       ",\"magZ\":" + String(robotStatus[status.targetID].magnetZ_gauss, 2) +
+                       ",\"magValid\":" + String(robotStatus[status.targetID].magnetFieldValid ? "true" : "false") + "}";
           
           // Try to send, but don't block if queue is full
           ws.textAll(json);
@@ -349,6 +412,9 @@ void guiTask(void *parameter) {
           Serial.printf("Status update for robot 0x%02X: (%.2f, %.2f) %.3frad %.2fV\n",
                        status.targetID, status.currentX, status.currentY, 
                        status.currentAngle, status.batteryVoltage);
+        } else if (status.magnetFieldValid) {
+          Serial.printf("Status update for robot 0x%02X: Magnet [%.2f, %.2f, %.2f] gauss\n",
+                       status.targetID, status.magnetX_gauss, status.magnetY_gauss, status.magnetZ_gauss);
         } else {
           Serial.printf("ACK timeout for robot 0x%02X\n", status.targetID);
         }

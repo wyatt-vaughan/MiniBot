@@ -90,7 +90,6 @@ bool Robot::initialize() {
         return false;
     }
 
-    // Set microstepping to 1/4
     left_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     right_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     left_wheel.resetDriver();
@@ -435,6 +434,9 @@ void Robot::setTargetPose(MotionCommand target) {
             break;
         }
     }
+
+    // maybe temporary, wait 5ms to allow motors to stabilize before disabling
+    vTaskDelay(pdMS_TO_TICKS(5));
     
     uint32_t elapsed = millis() - start_time;
     MOTION_LOG("Motion complete in %lu ms\n", elapsed);
@@ -443,7 +445,7 @@ void Robot::setTargetPose(MotionCommand target) {
     positionX = target_x;
     positionY = target_y;
     orientation = target_theta;
-    
+
     left_wheel.disable();
     right_wheel.disable();
     is_moving = false;

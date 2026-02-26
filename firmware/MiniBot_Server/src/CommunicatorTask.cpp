@@ -9,6 +9,7 @@ uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // ACK tracking
 static QueueHandle_t ackQueue = NULL;
+static QueueHandle_t magFieldQueue = NULL;
 
 // ESP-NOW callback when data is sent
 void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -19,8 +20,8 @@ void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 // ESP-NOW callback when data is received
 void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
   Serial.printf("ESP-NOW data received: %d bytes\n", len);
-  Serial.printf("Expected AckMessage size: %d bytes\n", sizeof(AckMessage));
   
+  // Try to handle as AckMessage first
   if (len == sizeof(AckMessage)) {
     AckMessage ack;
     memcpy(&ack, incomingData, sizeof(ack));
@@ -53,21 +54,49 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
       status.currentAngle = ack.orientation_rad;
       status.timestamp = ack.timestamp;
       status.batteryVoltage = ack.battery_voltage;
+      status.magnetFieldValid = false;
       
       broadcastStatus(status);
       Serial.println("  -> Broadcast to all status queues");
-    } else {
-      Serial.printf("Not an ACK message (type=%d, expected=%d)\n", ack.msg_type, MSG_TYPE_ACK_MESSAGE);
+      return;
     }
-  } else {
-    Serial.printf("Size mismatch: received %d bytes, expected %d bytes\n", len, sizeof(AckMessage));
   }
+  
+  // Try to handle as MagneticFieldResponse
+  if (len == sizeof(MagneticFieldResponse)) {
+    MagneticFieldResponse magField;
+    memcpy(&magField, incomingData, sizeof(magField));
+    
+    Serial.printf("Received message - Type: %d, ResponderID: 0x%02X\n", magField.msg_type, magField.responderID);
+    
+    if (magField.msg_type == MSG_TYPE_MAG_REQUEST) {
+      Serial.printf("Magnetic field response detected from robot 0x%02X\n", magField.responderID);
+      Serial.printf("  Field: [%.2f, %.2f, %.2f] gauss\n", magField.field_x_gauss, magField.field_y_gauss, magField.field_z_gauss);
+      Serial.printf("  Timestamp: %u\n", magField.timestamp);
+      
+      // Send to magField queue for timeout handling
+      if (magFieldQueue != NULL) {
+        if (xQueueSend(magFieldQueue, &magField, 0) == pdPASS) {
+          Serial.println("  -> Sent to magField queue");
+        } else {
+          Serial.println("  -> magField queue full!");
+        }
+      } else {
+        Serial.println("  -> magField queue is NULL!");
+      }
+      return;
+    }
+  }
+  
+  Serial.printf("Warning: Unhandled message type or size mismatch (len=%d, AckMsg=%d, MagField=%d)\n", 
+               len, sizeof(AckMessage), sizeof(MagneticFieldResponse));
 }
 
 // Initialize ESP-NOW
 void initESPNow() {
   // Create ACK queue
   ackQueue = xQueueCreate(10, sizeof(AckMessage));
+  magFieldQueue = xQueueCreate(10, sizeof(MagneticFieldResponse));
   
   // Initialize ESP-NOW
   if (esp_now_init() != ESP_OK) {
@@ -104,7 +133,7 @@ void communicatorTask(void *parameter) {
     // Check for commands from GUI
     if (xQueueReceive(commandQueue, &cmd, pdMS_TO_TICKS(10)) == pdPASS) {
       
-      if (cmd.isPositionRequest) {
+      if (cmd.requestType == 1) {
         // Send position request
         PositionRequest req;
         req.targetID = cmd.targetID;
@@ -151,14 +180,84 @@ void communicatorTask(void *parameter) {
             status.currentAngle = 0;
             status.timestamp = 0;
             status.batteryVoltage = 0;
+            status.magnetFieldValid = false;
             broadcastStatus(status);
           }
         } else {
           Serial.printf("Error sending position request: %d\n", result);
         }
         
+      } else if (cmd.requestType == 2) {
+        // Send magnetic field request
+        MagneticFieldRequest magReq;
+        magReq.targetID = cmd.targetID;
+        magReq.msg_type = MSG_TYPE_MAG_REQUEST;
+        magReq.timestamp = millis();
+        
+        Serial.printf("Sending magnetic field request to robot 0x%02X\n", cmd.targetID);
+        
+        // Clear any pending magField responses for this target
+        MagneticFieldResponse tempMag;
+        while (xQueueReceive(magFieldQueue, &tempMag, 0) == pdPASS) {
+          // Clear queue
+        }
+        
+        // Send broadcast
+        esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&magReq, sizeof(magReq));
+        
+        if (result == ESP_OK) {
+          Serial.println("Magnetic field request broadcast sent");
+          
+          // Wait for response with 500ms timeout
+          MagneticFieldResponse magResp;
+          bool respReceived = false;
+          uint32_t startTime = millis();
+          
+          while ((millis() - startTime) < 500) {
+            if (xQueueReceive(magFieldQueue, &magResp, pdMS_TO_TICKS(10)) == pdPASS) {
+              if (magResp.responderID == cmd.targetID && magResp.msg_type == MSG_TYPE_MAG_REQUEST) {
+                respReceived = true;
+                Serial.printf("Magnetic field response received from robot 0x%02X\n", cmd.targetID);
+                
+                // Update status with magnet field values (don't overwrite battery voltage)
+                GUIStatus status;
+                status.targetID = cmd.targetID;
+                status.ackReceived = true;
+                status.currentX = 0;
+                status.currentY = 0;
+                status.currentAngle = 0;
+                status.timestamp = magResp.timestamp;
+                status.batteryVoltage = -1.0f;  // Use sentinel value to indicate "don't update"
+                status.magnetX_gauss = magResp.field_x_gauss;
+                status.magnetY_gauss = magResp.field_y_gauss;
+                status.magnetZ_gauss = magResp.field_z_gauss;
+                status.magnetFieldValid = true;
+                broadcastStatus(status);
+                break;
+              }
+            }
+          }
+          
+          if (!respReceived) {
+            Serial.printf("No magnetic field response from robot 0x%02X (timeout)\n", cmd.targetID);
+            // Send timeout notification
+            GUIStatus status;
+            status.targetID = cmd.targetID;
+            status.ackReceived = false;
+            status.currentX = 0;
+            status.currentY = 0;
+            status.currentAngle = 0;
+            status.timestamp = 0;
+            status.batteryVoltage = 0;
+            status.magnetFieldValid = false;
+            broadcastStatus(status);
+          }
+        } else {
+          Serial.printf("Error sending magnetic field request: %d\n", result);
+        }
+        
       } else {
-        // Send position command
+        // Send position command (requestType == 0)
         PositionCommand posCmd;
         posCmd.targetID = cmd.targetID;
         posCmd.msg_type = MSG_TYPE_POSITION_COMMAND;
@@ -209,6 +308,7 @@ void communicatorTask(void *parameter) {
             status.currentAngle = 0;
             status.timestamp = 0;
             status.batteryVoltage = 0;
+            status.magnetFieldValid = false;
             broadcastStatus(status);
           }
         } else {

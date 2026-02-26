@@ -29,7 +29,7 @@ static void processSerialCommand(const char* command) {
   if (strncmp(command, "cmd,", 4) == 0) {
     // Position command
     GUICommand cmd;
-    cmd.isPositionRequest = false;
+    cmd.requestType = 0;  // Position command
     
     // Parse: cmd,<id>,<x>,<y>,<angle>,<duration>
     char* ptr = (char*)command + 4;
@@ -52,7 +52,7 @@ static void processSerialCommand(const char* command) {
   } else if (strncmp(command, "req,", 4) == 0) {
     // Position request
     GUICommand cmd;
-    cmd.isPositionRequest = true;
+    cmd.requestType = 1;  // Position request
     cmd.targetID = (uint8_t)strtol(command + 4, NULL, 16);
     cmd.x = 0;
     cmd.y = 0;

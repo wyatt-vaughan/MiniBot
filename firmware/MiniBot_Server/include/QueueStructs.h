@@ -8,7 +8,7 @@
 // Internal queue message types
 struct GUICommand {
   uint8_t targetID;
-  bool isPositionRequest;  // true = position request, false = position command
+  uint8_t requestType;  // 0 = position command, 1 = position request, 2 = magnet request
   float x;
   float y;
   float angle;
@@ -23,6 +23,10 @@ struct GUIStatus {
   float currentAngle;
   uint32_t timestamp;
   float batteryVoltage;
+  float magnetX_gauss;
+  float magnetY_gauss;
+  float magnetZ_gauss;
+  bool magnetFieldValid;
 };
 
 // Queue handles

@@ -33,13 +33,11 @@ static bool create_tasks(void) {
         &kinematics_task_handle,
         1
     );
-    if (task_created == pdPASS) {
-        Serial.println("Kinematics Controller task created successfully");
-    }
-    else {
+    if (task_created != pdPASS) {
         Serial.println("ERROR: Failed to create Kinematics Controller task");
         return false;
     }
+    Serial.println("Kinematics Controller task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
         EspNowCommunicator_Task,
@@ -50,47 +48,41 @@ static bool create_tasks(void) {
         &communicator_task_handle,
         0
     );
-    if (task_created == pdPASS) {
-        Serial.println("ESP-NOW Communicator task created successfully");
-    }
-    else {
+    if (task_created != pdPASS) {
         Serial.println("ERROR: Failed to create ESP-NOW Communicator task");
         return false;
     }
+    Serial.println("ESP-NOW Communicator task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
         PositionEstimator_Task,
         "PositionEstimator",
-        2048,
+        4096,
         (void*)&robot,
         2,
         &position_estimator_task_handle,
         0
     );
-    if (task_created == pdPASS) {
-        Serial.println("Position Estimator task created successfully");
-    }
-    else {
+    if (task_created != pdPASS) {
         Serial.println("ERROR: Failed to create Position Estimator task");
         return false;
     }
+    Serial.println("Position Estimator task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
         BatteryMonitor_Task,
         "BatteryMonitor",
-        1024,
+        2048,
         (void*)&robot,
         1,
         &battery_monitor_task_handle,
         0
     );
-    if (task_created == pdPASS) {
-        Serial.println("Battery Monitor task created successfully");
-    }
-    else {
+    if (task_created != pdPASS) {
         Serial.println("ERROR: Failed to create Battery Monitor task");
         return false;
     }
+    Serial.println("Battery Monitor task created successfully");
     
     // No Status LED on V3 boards, keep for future use
     // task_created = xTaskCreatePinnedToCore(
@@ -102,13 +94,11 @@ static bool create_tasks(void) {
     //     &led_status_task_handle,
     //     0
     // );
-    // if (task_created == pdPASS) {
-    //     Serial.println("LED Status task created successfully");
-    // }
-    // else {
+    // if (task_created != pdPASS) {
     //     Serial.println("ERROR: Failed to create LED Status task");
     //     return false;
     // }
+    // Serial.println("LED Status task created successfully");
     
     return true;
 }
@@ -145,7 +135,7 @@ static bool initialize_modules(void) {
     }
     Serial.println("Position estimator initialized successfully");
     
-    if (!BatteryMonitor_Init(0)) {
+    if (!BatteryMonitor_Init(BATTERY_VOLTAGE_PIN)) {
         Serial.println("ERROR: Failed to initialize battery monitor");
         return false;
     }
@@ -166,7 +156,7 @@ void setup() {
     Serial.println("\n\n=== MiniBot Stepper Client ===");
 
     // Write device ID to NVS, ony do this one time. Persistant across reflashes.
-    // This functionality should eventually be wrapped into some other tool.
+    // TODO create a function to set ID based on current position on chess board
     // setDeviceID(0x03);
     
     uint8_t device_id = getDeviceID();

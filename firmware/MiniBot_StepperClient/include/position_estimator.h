@@ -30,4 +30,15 @@ void PositionEstimator_Task(void* pvParameters);
  */
 bool PositionEstimator_Init(void);
 
+/**
+ * Get the latest raw magnetometer field readings
+ * Returns the averaged magnetic field values from the magnetometer
+ * 
+ * @param x Pointer to store field_x value in Gauss
+ * @param y Pointer to store field_y value in Gauss
+ * @param z Pointer to store field_z value in Gauss
+ * @return true on success, false if magnetometer not initialized
+ */
+bool PositionEstimator_GetLatestMagneticField(float* x, float* y, float* z);
+
 #endif // __POSITION_ESTIMATOR_H__

@@ -130,6 +130,7 @@ private:
     float true_theta;
     
     float battery_voltage;
+    float low_battery_v_threshold = BATTERY_CRITICAL_VOLTAGE;
     uint8_t system_status;
     
     // Motion state tracking
@@ -214,6 +215,12 @@ public:
      * @return Battery voltage in volts
      */
     float getBatteryVoltage() const { return battery_voltage; }
+
+    /**
+     * Get battery voltage
+     * @return Battery voltage in volts
+     */
+    bool getBatteryCritical() const { return battery_voltage < low_battery_v_threshold; }
     
     /**
      * Check if robot is currently executing a motion

@@ -1,6 +1,7 @@
 #include "position_estimator.h"
 #include "position_lut.h"
 #include "mmc5633.h"
+#include "utils.h"
 #include "config.h"
 #include <Arduino.h>
 #include <Wire.h>
@@ -82,6 +83,17 @@ bool PositionEstimator_Init(void) {
     }
     
     mag_initialized = true;
+    return true;
+}
+
+bool PositionEstimator_GetLatestMagneticField(float* x, float* y, float* z) {
+    if (!mag_initialized || x == NULL || y == NULL || z == NULL) {
+        return false;
+    }
+    
+    *x = avgX.avg();
+    *y = avgY.avg();
+    *z = avgZ.avg();
     return true;
 }
 
@@ -244,8 +256,6 @@ void PositionEstimator_Task(void* pvParameters) {
         
         if ((current_micros - last_sample_time) >= EMAG_SAMPLE_PERIOD_US) {
             last_sample_time = current_micros;
-
-            // Serial.printf("mag_init: %d, state: %d, elapsed: %lu ms\n", mag_initialized, current_state, elapsed_ms);
             
             if (mag_initialized && mag.readMeasurement()) {
                 float mx = mag.getFieldGaussX();
@@ -258,7 +268,7 @@ void PositionEstimator_Task(void* pvParameters) {
                         avgY.add(my);
                         avgZ.add(mz);
 
-                        Serial.printf("mx: %.2f\tmy: %.2f\tmz: %.2f\n", mx, my, mz);
+                        // Serial.printf("mx: %.2f\tmy: %.2f\tmz: %.2f\n", mx, my, mz);
                         // Serial.printf("avgx: %.2f, avgy: %.2f, avgz: %.2f\n", avgX.avg(), avgY.avg(), avgZ.avg());
                         
                         if (detectStartPulse(mx, my, mz, current_time)) {
