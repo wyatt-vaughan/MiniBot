@@ -127,57 +127,75 @@ void initESPNow() {
 void communicatorTask(void *parameter) {
   Serial.println("Communicator Task started");
   
-  GUICommand cmd;
+  CommandMessage msg;
   
   while (1) {
-    // Check for commands from GUI
-    if (xQueueReceive(commandQueue, &cmd, pdMS_TO_TICKS(10)) == pdPASS) {
+    // Check for commands from GUI or Joystick
+    if (xQueueReceive(commandQueue, &msg, pdMS_TO_TICKS(10)) == pdPASS) {
       
-      if (cmd.requestType == 1) {
-        // Send position request
-        PositionRequest req;
-        req.targetID = cmd.targetID;
-        req.msg_type = MSG_TYPE_POSITION_REQUEST;
-        req.timestamp = millis();
-        
-        Serial.printf("Sending position request to robot 0x%02X\n", cmd.targetID);
-        
-        // Clear any pending ACKs for this target
-        AckMessage tempAck;
-        while (xQueueReceive(ackQueue, &tempAck, 0) == pdPASS) {
-          // Clear queue
-        }
+      if (msg.commandType == CMD_TYPE_MOT_TEST) {
+        // Handle MotTestCommand (from Joystick or other sources)
+        MotTestCommand *motCmd = &msg.data.motCmd;
+        Serial.printf("Sending MotTestCommand to 0x%02X: M0=%d, M1=%d\n", 
+                     motCmd->targetID, motCmd->m0_vel, motCmd->m1_vel);
         
         // Send broadcast
-        esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&req, sizeof(req));
+        esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)motCmd, sizeof(MotTestCommand));
         
         if (result == ESP_OK) {
-          Serial.println("Position request broadcast sent");
+          Serial.println("MotTestCommand broadcast sent");
+        } else {
+          Serial.printf("MotTestCommand send failed: %d\n", result);
+        }
+      } else if (msg.commandType == CMD_TYPE_GUI) {
+        // Handle GUICommand (from GUI)
+        GUICommand *cmd = &msg.data.guiCmd;
+      
+        if (cmd->requestType == 1) {
+          // Send position request
+          PositionRequest req;
+          req.targetID = cmd->targetID;
+          req.msg_type = MSG_TYPE_POSITION_REQUEST;
+          req.timestamp = millis();
           
-          // Wait for ACK with 500ms timeout
-          AckMessage ack;
-          bool ackReceived = false;
-          uint32_t startTime = millis();
+          Serial.printf("Sending position request to robot 0x%02X\n", cmd->targetID);
           
-          while ((millis() - startTime) < 500) {
-            if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
-              if (ack.responderID == cmd.targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
-                ackReceived = true;
-                Serial.printf("ACK received from robot 0x%02X\n", cmd.targetID);
-                break;
-              }
-            }
+          // Clear any pending ACKs for this target
+          AckMessage tempAck;
+          while (xQueueReceive(ackQueue, &tempAck, 0) == pdPASS) {
+            // Clear queue
           }
           
-          if (!ackReceived) {
-            Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd.targetID);
-            // Send timeout notification to all tasks
-            GUIStatus status;
-            status.targetID = cmd.targetID;
-            status.ackReceived = false;
-            status.currentX = 0;
-            status.currentY = 0;
-            status.currentAngle = 0;
+          // Send broadcast
+          esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&req, sizeof(req));
+          
+          if (result == ESP_OK) {
+            Serial.println("Position request broadcast sent");
+            
+            // Wait for ACK with 500ms timeout
+            AckMessage ack;
+            bool ackReceived = false;
+            uint32_t startTime = millis();
+            
+            while ((millis() - startTime) < 500) {
+              if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
+                if (ack.responderID == cmd->targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+                  ackReceived = true;
+                  Serial.printf("ACK received from robot 0x%02X\n", cmd->targetID);
+                  break;
+                }
+              }
+            }
+            
+            if (!ackReceived) {
+              Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd->targetID);
+              // Send timeout notification to all tasks
+              GUIStatus status;
+              status.targetID = cmd->targetID;
+              status.ackReceived = false;
+              status.currentX = 0;
+              status.currentY = 0;
+              status.currentAngle = 0;
             status.timestamp = 0;
             status.batteryVoltage = 0;
             status.magnetFieldValid = false;
@@ -187,14 +205,14 @@ void communicatorTask(void *parameter) {
           Serial.printf("Error sending position request: %d\n", result);
         }
         
-      } else if (cmd.requestType == 2) {
+      } else if (cmd->requestType == 2) {
         // Send magnetic field request
         MagneticFieldRequest magReq;
-        magReq.targetID = cmd.targetID;
+        magReq.targetID = cmd->targetID;
         magReq.msg_type = MSG_TYPE_MAG_REQUEST;
         magReq.timestamp = millis();
         
-        Serial.printf("Sending magnetic field request to robot 0x%02X\n", cmd.targetID);
+        Serial.printf("Sending magnetic field request to robot 0x%02X\n", cmd->targetID);
         
         // Clear any pending magField responses for this target
         MagneticFieldResponse tempMag;
@@ -215,13 +233,13 @@ void communicatorTask(void *parameter) {
           
           while ((millis() - startTime) < 500) {
             if (xQueueReceive(magFieldQueue, &magResp, pdMS_TO_TICKS(10)) == pdPASS) {
-              if (magResp.responderID == cmd.targetID && magResp.msg_type == MSG_TYPE_MAG_REQUEST) {
+              if (magResp.responderID == cmd->targetID && magResp.msg_type == MSG_TYPE_MAG_REQUEST) {
                 respReceived = true;
-                Serial.printf("Magnetic field response received from robot 0x%02X\n", cmd.targetID);
+                Serial.printf("Magnetic field response received from robot 0x%02X\n", cmd->targetID);
                 
                 // Update status with magnet field values (don't overwrite battery voltage)
                 GUIStatus status;
-                status.targetID = cmd.targetID;
+                status.targetID = cmd->targetID;
                 status.ackReceived = true;
                 status.currentX = 0;
                 status.currentY = 0;
@@ -239,10 +257,10 @@ void communicatorTask(void *parameter) {
           }
           
           if (!respReceived) {
-            Serial.printf("No magnetic field response from robot 0x%02X (timeout)\n", cmd.targetID);
+            Serial.printf("No magnetic field response from robot 0x%02X (timeout)\n", cmd->targetID);
             // Send timeout notification
             GUIStatus status;
-            status.targetID = cmd.targetID;
+            status.targetID = cmd->targetID;
             status.ackReceived = false;
             status.currentX = 0;
             status.currentY = 0;
@@ -259,16 +277,16 @@ void communicatorTask(void *parameter) {
       } else {
         // Send position command (requestType == 0)
         PositionCommand posCmd;
-        posCmd.targetID = cmd.targetID;
+        posCmd.targetID = cmd->targetID;
         posCmd.msg_type = MSG_TYPE_POSITION_COMMAND;
         posCmd.timestamp = millis();
-        posCmd.target_x_mm = cmd.x;
-        posCmd.target_y_mm = cmd.y;
-        posCmd.target_a_rad = cmd.angle;
-        posCmd.move_duration_ms = cmd.duration;
+        posCmd.target_x_mm = cmd->x;
+        posCmd.target_y_mm = cmd->y;
+        posCmd.target_a_rad = cmd->angle;
+        posCmd.move_duration_ms = cmd->duration;
         
         Serial.printf("Sending position command to robot 0x%02X: (%.2f, %.2f) %.2frad %.2fms\n",
-                     cmd.targetID, cmd.x, cmd.y, cmd.angle, cmd.duration);
+                     cmd->targetID, cmd->x, cmd->y, cmd->angle, cmd->duration);
         
         // Clear any pending ACKs for this target
         AckMessage tempAck;
@@ -289,19 +307,19 @@ void communicatorTask(void *parameter) {
           
           while ((millis() - startTime) < 500) {
             if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
-              if (ack.responderID == cmd.targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+              if (ack.responderID == cmd->targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
                 ackReceived = true;
-                Serial.printf("ACK received from robot 0x%02X\n", cmd.targetID);
+                Serial.printf("ACK received from robot 0x%02X\n", cmd->targetID);
                 break;
               }
             }
           }
           
           if (!ackReceived) {
-            Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd.targetID);
+            Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd->targetID);
             // Send timeout notification to all tasks
             GUIStatus status;
-            status.targetID = cmd.targetID;
+            status.targetID = cmd->targetID;
             status.ackReceived = false;
             status.currentX = 0;
             status.currentY = 0;
@@ -314,7 +332,8 @@ void communicatorTask(void *parameter) {
         } else {
           Serial.printf("Error sending position command: %d\n", result);
         }
-      }
+        }  // End of GUI command handling
+      }  // End of command type check
     }
     
     vTaskDelay(pdMS_TO_TICKS(10));

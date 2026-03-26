@@ -6,7 +6,7 @@
 TaskHandle_t pythonCommTaskHandle = NULL;
 
 // Serial2 for Python communication
-#define PYTHON_SERIAL Serial2
+#define PYTHON_SERIAL Serial1
 #define PYTHON_BAUD 115200
 #define PYTHON_RX_PIN 16
 #define PYTHON_TX_PIN 17

@@ -8,7 +8,7 @@ QueueHandle_t pythonStatusQueue = NULL;
 QueueHandle_t i2cStatusQueue = NULL;
 
 void initQueues() {
-  commandQueue = xQueueCreate(10, sizeof(GUICommand));
+  commandQueue = xQueueCreate(10, sizeof(CommandMessage));
   guiStatusQueue = xQueueCreate(20, sizeof(GUIStatus));
   pythonStatusQueue = xQueueCreate(20, sizeof(GUIStatus));
   i2cStatusQueue = xQueueCreate(20, sizeof(GUIStatus));

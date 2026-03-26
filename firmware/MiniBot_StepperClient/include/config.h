@@ -55,7 +55,7 @@
 // ============================================================================
 
 // Linear motion constraints
-#define ROBOT_MAX_VELOCITY_MM_S    100.0f   // Maximum linear velocity (mm/s)
+#define ROBOT_MAX_VELOCITY_MM_S    200.0f   // Maximum linear velocity (mm/s) NOT USED
 #define ROBOT_MAX_ACCEL_MM_S2      200.0f    // Maximum linear acceleration (mm/s²)
 
 // Rotational motion constraints
@@ -63,7 +63,11 @@
 #define MAX_ROT_ACCEL_RAD_S2       5.0f    // Maximum angular acceleration (rad/s²)
 
 // Stepper motor safety limit
-#define STEPPER_MAX_VELOCITY_MM_S  200.0f   // Stepper motor maximum velocity
+#define STEPPER_MAX_VELOCITY_MM_S  250.0f   // Stepper motor maximum velocity
+
+// Motor test command configuration
+#define MOTOR_TEST_TIMEOUT_MS      1000     // Timeout for motor test commands (ms)
+#define MOTOR_TEST_ACCEL_RAD_S2    MAX_ROT_ACCEL_RAD_S2  // Motor test acceleration limit
 
 #define POSITION_TOLERANCE_MM 2.0f          // Position error tolerance
 #define ANGLE_TOLERANCE_RAD 0.05f           // ~3 degrees angle tolerance
@@ -101,5 +105,36 @@
 // ============================================================================
 
 #define MOTION_DEBUG_LOGGING        true    // Enable detailed motion control debug output
+
+// ============================================================================
+// Electromagnet Positioning System Configuration
+// ============================================================================
+
+// Frame structure timing (all in milliseconds)
+#define EMAG_PAUSE_TIME_MS           100    // Quiet period required before frame start
+#define EMAG_START_PULSE_COUNT       3      // Number of start pulses
+#define EMAG_START_PULSE_ON_MS       3      // Start pulse on duration
+#define EMAG_START_PULSE_OFF_MS      3      // Start pulse off duration
+#define EMAG_START_TOTAL_MS          (EMAG_START_PULSE_COUNT * (EMAG_START_PULSE_ON_MS + EMAG_START_PULSE_OFF_MS))
+#define EMAG_MEASUREMENT_PHASE_MS    60     // Total measurement window duration
+#define EMAG_OFF_TIME_BETWEEN_MS     18     // Trailing off time after measurement phase
+#define EMAG_TOTAL_FRAME_MS          (EMAG_PAUSE_TIME_MS + EMAG_START_TOTAL_MS + EMAG_MEASUREMENT_PHASE_MS + EMAG_OFF_TIME_BETWEEN_MS)
+
+// Electromagnet slot timing
+#define EMAG_COUNT                   6      // Number of electromagnets per frame
+#define EMAG_ON_TIME_MS              12     // Electromagnet on duration per slot
+#define EMAG_GAP_TIME_MS             3      // Gap between slots
+#define EMAG_TRIM_MS                 1      // Samples to trim from slot leading/trailing edges
+
+// Sampling
+#define EMAG_SAMPLE_PERIOD_US        1000   // 1 kHz sampling period (µs)
+#define MAX_SAMPLES_PER_EMAG         ((EMAG_ON_TIME_MS * 1000) / EMAG_SAMPLE_PERIOD_US)
+
+// Detection thresholds
+#define FIELD_THRESHOLD_GAUSS        0.5f   // Minimum field magnitude to detect emag active
+#define PULSE_ON_MIN_MS              2      // Start pulse on-time valid range min
+#define PULSE_ON_MAX_MS              4      // Start pulse on-time valid range max
+#define PULSE_OFF_MIN_MS             2      // Start pulse off-time valid range min
+#define PULSE_OFF_MAX_MS             4      // Start pulse off-time valid range max
 
 #endif // __CONFIG_H__

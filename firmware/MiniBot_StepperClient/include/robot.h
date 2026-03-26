@@ -136,6 +136,14 @@ private:
     // Motion state tracking
     bool is_moving;
 
+    // Motor test state tracking
+    bool motor_test_active = false;
+    float target_m0_velocity_rad_s = 0.0f;
+    float target_m1_velocity_rad_s = 0.0f;
+    float current_m0_velocity_rad_s = 0.0f;
+    float current_m1_velocity_rad_s = 0.0f;
+    uint32_t motor_test_last_update_time = 0;
+
     // Motor and motion control constants - initialized from config.h but modifiable
     float steps_per_revolution;
     float robot_max_velocity_mm_s;
@@ -199,10 +207,24 @@ public:
     void setTargetPose(MotionCommand target);
 
     /**
-     * Set target position and orientation, always absolute coordinates
-     * @param target MotionCommand struct with target pose
+     * Set motor test velocities and start motor test mode
+     * @param m0_velocity_rad_s Motor 0 target velocity in rad/s
+     * @param m1_velocity_rad_s Motor 1 target velocity in rad/s
      */
-    void setTestState(MotTestCommand target);
+    void setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_s);
+
+    /**
+     * Stop motor test mode
+     */
+    void stopMotorTest();
+    
+    /**
+     * Update motor test stepping with time delta
+     * Called periodically by kinematics controller to update motor velocities with ramping
+     * and execute stepping
+     * @param dt_ms Time delta since last update in milliseconds
+     */
+    void updateMotorTest(uint32_t dt_ms);
     
     /**
      * Set battery voltage (from battery monitor task)

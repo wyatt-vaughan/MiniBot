@@ -5,6 +5,7 @@
 #include "config.h"
 #include "messages_espnow.h"
 #include "motion_queue.h"
+#include "motor_test_queue.h"
 #include "robot.h"
 #include <WiFi.h>
 #include <vector>
@@ -22,8 +23,8 @@ typedef std::function<void(const uint8_t* mac_addr, const uint8_t* data, int len
  * Priority: HIGH
  * Responsible for:
  * - Receiving commands via ESP-NOW protocol
- * - Parsing received motion commands
- * - Enqueuing commands to the motion queue
+ * - Parsing received motion and motor test commands
+ * - Enqueuing commands to the motion and motor test queues
  * - Sending status updates back to the remote controller
  * 
  * @param pvParameters Pointer to initialization parameters (unused)
@@ -35,9 +36,10 @@ void EspNowCommunicator_Task(void* pvParameters);
  * Should be called before starting the task
  * 
  * @param motion_queue MotionQueue handle
+ * @param motor_test_queue MotorTestQueue handle
  * @return true on success, false on failure
  */
-bool EspNowCommunicator_Init(MotionQueue motion_queue);
+bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test_queue);
 
 /**
  * Register a callback function to be called when broadcast messages are received

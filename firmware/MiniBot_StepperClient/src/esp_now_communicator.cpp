@@ -1,8 +1,11 @@
 #include "esp_now_communicator.h"
 #include "device_id.h"
 #include "position_estimator.h"
+#include "config.h"
+#include <cmath>
 
 static MotionQueue comm_queue = NULL;
+static MotorTestQueue motor_test_queue = NULL;
 static EspNowReceiveCallback receive_callback = nullptr;
 static Robot* g_robot_ptr = NULL;
 static uint8_t last_sender_mac[6] = {0};
@@ -14,12 +17,13 @@ static bool ensure_peer_exists(const uint8_t *mac_addr);
 static bool send_ack_message(const uint8_t *mac_addr);
 static void send_completion_ack_if_pending();
 
-bool EspNowCommunicator_Init(MotionQueue motion_queue) {
-    if (motion_queue == NULL) {
+bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test_q) {
+    if (motion_queue == NULL || motor_test_q == NULL) {
         return false;
     }
     
     comm_queue = motion_queue;
+    motor_test_queue = motor_test_q;
     
     WiFi.mode(WIFI_STA);
     delay(100);
@@ -179,7 +183,7 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
     uint8_t target_id = data[0];
     uint8_t msg_type = data[1];
     
-    if (target_id != getDeviceID()) {
+    if (target_id != getDeviceID() && target_id != 0xFF) {
         return;
     }
     
@@ -215,10 +219,37 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
         case MSG_TYPE_MOT_TEST_COMMAND: {
             if (len < sizeof(MotTestCommand)) {
                 Serial.println("ERROR: MotTestCommand too short");
+                send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
-            Serial.println("Received motor test command");
-            send_nack_message(mac_addr, ERR_NOT_IMPLEMENTED);
+            
+            MotTestCommand* test_cmd = (MotTestCommand*)data;
+            
+            if (test_cmd->enabled) {
+                // Convert int8_t command to rad/s (scale from -128..127 using max stepper velocity)
+                float m0_vel_rad_s = (((float)test_cmd->m0_vel / 128.0f) * STEPPER_MAX_VELOCITY_MM_S) / WHEEL_RADIUS_MM;
+                float m1_vel_rad_s = (((float)test_cmd->m1_vel / 128.0f) * STEPPER_MAX_VELOCITY_MM_S) / WHEEL_RADIUS_MM;
+                
+                MotorTestRequest motor_req = {
+                    m0_vel_rad_s,
+                    m1_vel_rad_s
+                };
+                
+                if (MotorTestQueue_Enqueue(motor_test_queue, &motor_req)) {
+                    Serial.printf("Motor test command queued: M0=%.2f rad/s, M1=%.2f rad/s\n", 
+                                m0_vel_rad_s, m1_vel_rad_s);
+                    // send_ack_message(mac_addr);
+                } else {
+                    Serial.println("ERROR: Motor test queue full");
+                    // send_nack_message(mac_addr, ERR_QUEUE_FULL);
+                }
+            } else {
+                // Stop motor test - send immediate stop signal via zero velocity command
+                MotorTestRequest motor_req = {0.0f, 0.0f};
+                MotorTestQueue_Enqueue(motor_test_queue, &motor_req);
+                Serial.println("Motor test stop command queued");
+                // send_ack_message(mac_addr);
+            }
             break;
         }
         
@@ -306,6 +337,6 @@ void EspNowCommunicator_Task(void* pvParameters) {
             send_completion_ack_if_pending();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

@@ -5,6 +5,12 @@
 #include <freertos/queue.h>
 #include "ESPNowMessages.h"
 
+// Command type discriminator
+enum CommandType {
+  CMD_TYPE_GUI = 0,
+  CMD_TYPE_MOT_TEST = 1
+};
+
 // Internal queue message types
 struct GUICommand {
   uint8_t targetID;
@@ -13,6 +19,15 @@ struct GUICommand {
   float y;
   float angle;
   float duration;
+};
+
+// Union to allow different command types through the same queue
+struct CommandMessage {
+  uint8_t commandType;  // Discriminator: 0=GUICommand, 1=MotTestCommand
+  union {
+    GUICommand guiCmd;
+    MotTestCommand motCmd;
+  } data;
 };
 
 struct GUIStatus {

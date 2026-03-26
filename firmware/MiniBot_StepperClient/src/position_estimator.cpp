@@ -1,34 +1,22 @@
 #include "position_estimator.h"
-#include "position_lut.h"
 #include "mmc5633.h"
 #include "utils.h"
 #include "config.h"
 #include <Arduino.h>
 #include <Wire.h>
 
-// Electromagnet positioning system timing parameters (all in milliseconds)
-#define EMAG_PAUSE_TIME_MS           100
-#define EMAG_START_PULSE_COUNT       3
-#define EMAG_START_PULSE_ON_MS       3
-#define EMAG_START_PULSE_OFF_MS      3
-#define EMAG_START_TOTAL_MS          (EMAG_START_PULSE_COUNT * (EMAG_START_PULSE_ON_MS + EMAG_START_PULSE_OFF_MS))
-#define EMAG_MEASUREMENT_PHASE_MS    60
-#define EMAG_OFF_TIME_BETWEEN_MS     18
-#define EMAG_TOTAL_FRAME_MS          (EMAG_PAUSE_TIME_MS + EMAG_START_TOTAL_MS + EMAG_MEASUREMENT_PHASE_MS + EMAG_OFF_TIME_BETWEEN_MS)
-
-#define EMAG_COUNT                   6
-#define EMAG_ON_TIME_MS              12
-#define EMAG_GAP_TIME_MS             3
-#define EMAG_TRIM_MS                 1
-#define EMAG_SAMPLE_PERIOD_US        500  // 2kHz = 500us period
-
-#define MAX_SAMPLES_PER_EMAG         ((EMAG_ON_TIME_MS * 1000) / EMAG_SAMPLE_PERIOD_US)
-
 struct EmagReading {
     float x[MAX_SAMPLES_PER_EMAG];
     float y[MAX_SAMPLES_PER_EMAG];
     float z[MAX_SAMPLES_PER_EMAG];
     uint16_t count;
+};
+
+struct EmagFrameData {
+    EmagReading readings[EMAG_COUNT];
+    float bg_x;
+    float bg_y;
+    float bg_z;
 };
 
 enum PositionEstState {
@@ -44,16 +32,10 @@ enum PulseDetectState {
     PULSE_LOW
 };
 
-#define FIELD_THRESHOLD_GAUSS        0.5f  // Threshold for detecting electromagnet on
-#define PULSE_ON_MIN_MS              2
-#define PULSE_ON_MAX_MS              4
-#define PULSE_OFF_MIN_MS             2
-#define PULSE_OFF_MAX_MS             4
-
 static MMC5633NJL mag;
-static RollingAverage<50> avgX;
-static RollingAverage<50> avgY;
-static RollingAverage<50> avgZ;
+static RollingAverage<10> avgX;
+static RollingAverage<10> avgY;
+static RollingAverage<10> avgZ;
 static bool mag_initialized = false;
 
 static EmagReading emag_readings[EMAG_COUNT];
@@ -66,9 +48,17 @@ static PulseDetectState pulse_state = PULSE_IDLE;
 static uint32_t pulse_transition_time = 0;
 static uint8_t detected_pulse_count = 0;
 
+static QueueHandle_t emag_frame_queue = NULL;
+
 bool PositionEstimator_Init(void) {
     Wire.begin(SDA_PIN, SCL_PIN);
-    
+
+    emag_frame_queue = xQueueCreate(1, sizeof(EmagFrameData));
+    if (emag_frame_queue == NULL) {
+        Serial.println("ERROR: Failed to create emag frame queue");
+        return false;
+    }
+
     if (!mag.begin(SDA_PIN, SCL_PIN)) {
         Serial.println("ERROR: MMC5633NJL init failed");
         return false;
@@ -81,7 +71,7 @@ bool PositionEstimator_Init(void) {
     } else {
         Serial.println("Magnetometer self-test passed");
     }
-    
+
     mag_initialized = true;
     return true;
 }
@@ -97,7 +87,7 @@ bool PositionEstimator_GetLatestMagneticField(float* x, float* y, float* z) {
     return true;
 }
 
-static void trimAndAverageSamples(EmagReading* reading, float* avg_x, float* avg_y, float* avg_z) {
+static void trimAndAverageSamples(const EmagReading* reading, float* avg_x, float* avg_y, float* avg_z) {
     uint16_t trim_samples = (EMAG_TRIM_MS * 1000) / EMAG_SAMPLE_PERIOD_US;
     
     if (reading->count < (trim_samples * 2)) {
@@ -128,47 +118,9 @@ static void trimAndAverageSamples(EmagReading* reading, float* avg_x, float* avg
     }
 }
 
-static bool computePositionFromReadings(Robot* robot) {
-    float measured_intensities[EMAG_AXES];
-    
-    for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-        float avg_x, avg_y, avg_z;
-        trimAndAverageSamples(&emag_readings[i], &avg_x, &avg_y, &avg_z);
-        
-        float mx_cal = avg_x - avgX.avg();
-        float my_cal = avg_y - avgY.avg();
-        float mz_cal = avg_z - avgZ.avg();
-        
-        measured_intensities[i] = sqrtf(mx_cal * mx_cal + my_cal * my_cal + mz_cal * mz_cal);
-    }
-    
-    PositionEstimate estimate;
-    if (PositionLUT_ComputePosition(measured_intensities, &estimate)) {
-        robot->setTruePose(estimate.x_mm, estimate.y_mm, estimate.theta_rad);
-        
-        Serial.print("Position: (");
-        Serial.print(estimate.x_mm);
-        Serial.print(", ");
-        Serial.print(estimate.y_mm);
-        Serial.print(", ");
-        Serial.print(estimate.theta_rad);
-        Serial.print(") confidence: ");
-        Serial.println(estimate.confidence);
-        
-        return true;
-    }
-    
+static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robot) {
+    Serial.println("Computing position from frame data...TODO :)");
     return false;
-}
-
-static void processEmagFrame(Robot* robot) {
-    if (computePositionFromReadings(robot)) {
-        Serial.println("Position update computed from electromagnet data");
-    }
-    
-    for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-        emag_readings[i].count = 0;
-    }
 }
 
 static bool detectStartPulse(float mx, float my, float mz, uint32_t current_time) {
@@ -235,97 +187,141 @@ static bool detectStartPulse(float mx, float my, float mz, uint32_t current_time
     return false;
 }
 
-void PositionEstimator_Task(void* pvParameters) {
+void PositionEstimator_SensorTask(void* pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(100));
-    Robot* robot = (Robot*)pvParameters;
-    
-    if (robot == NULL) {
+
+    if (emag_frame_queue == NULL) {
+        Serial.println("ERROR: emag_frame_queue not initialized");
         vTaskDelete(NULL);
         return;
     }
-    
-    state_start_time = millis();
-    current_state = STATE_IDLE;
-    
+
+    if (!mag.enableContinuousMode()) {
+        Serial.println("ERROR: Failed to enable continuous mode");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    current_state = STATE_WAITING_PAUSE;
     uint32_t last_sample_time = micros();
-    
+    uint32_t pause_quiet_start = 0;
+    bool pause_was_quiet = false;
+
     while (1) {
         uint32_t current_time = millis();
         uint32_t current_micros = micros();
-        uint32_t elapsed_ms = current_time - state_start_time;
-        
+
         if ((current_micros - last_sample_time) >= EMAG_SAMPLE_PERIOD_US) {
             last_sample_time = current_micros;
-            
+
             if (mag_initialized && mag.readMeasurement()) {
                 float mx = mag.getFieldGaussX();
                 float my = mag.getFieldGaussY();
                 float mz = mag.getFieldGaussZ();
-                
-                switch (current_state) {
-                    case STATE_IDLE:
-                        avgX.add(mx);
-                        avgY.add(my);
-                        avgZ.add(mz);
 
-                        // Serial.printf("mx: %.2f\tmy: %.2f\tmz: %.2f\n", mx, my, mz);
-                        // Serial.printf("avgx: %.2f, avgy: %.2f, avgz: %.2f\n", avgX.avg(), avgY.avg(), avgZ.avg());
-                        
-                        if (detectStartPulse(mx, my, mz, current_time)) {
-                            current_state = STATE_WAITING_PAUSE;
-                            state_start_time = current_time;
-                            Serial.println("Start pulse pattern detected!");
-                        }
-                        break;
-                        
-                    case STATE_WAITING_PAUSE:
-                        if (elapsed_ms >= EMAG_PAUSE_TIME_MS) {
-                            current_state = STATE_START_PULSES;
-                            state_start_time = current_time;
-                            start_pulse_count = 0;
-                            Serial.println("Detected start pulses");
-                        }
-                        break;
-                        
-                    case STATE_START_PULSES:
-                        if (elapsed_ms >= EMAG_START_TOTAL_MS) {
-                            current_state = STATE_MEASURING;
-                            state_start_time = current_time;
-                            current_emag_index = 0;
-                            
-                            for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-                                emag_readings[i].count = 0;
+                avgX.add(mx);
+                avgY.add(my);
+                avgZ.add(mz);
+
+                float mx_cal = mx - avgX.avg();
+                float my_cal = my - avgY.avg();
+                float mz_cal = mz - avgZ.avg();
+                float field_magnitude = sqrtf(mx_cal * mx_cal + my_cal * my_cal + mz_cal * mz_cal);
+
+                Serial.printf("%.3f\t%.3f\t%.3f\t%.3f\n", mx, my, mz, field_magnitude);
+
+                switch (current_state) {
+
+                    case STATE_WAITING_PAUSE: {
+                        if (field_magnitude < FIELD_THRESHOLD_GAUSS) {
+                            if (!pause_was_quiet) {
+                                pause_was_quiet = true;
+                                pause_quiet_start = current_time;
+                            } else if ((current_time - pause_quiet_start) >= EMAG_PAUSE_TIME_MS) {
+                                pulse_state = PULSE_IDLE;
+                                detected_pulse_count = 0;
+                                current_state = STATE_START_PULSES;
                             }
-                            Serial.println("Starting measurement phase");
-                        }
-                        break;
-                        
-                    case STATE_MEASURING: {
-                        uint32_t phase_time = elapsed_ms % (EMAG_ON_TIME_MS + EMAG_GAP_TIME_MS);
-                        uint32_t total_phase = elapsed_ms / (EMAG_ON_TIME_MS + EMAG_GAP_TIME_MS);
-                        
-                        if (total_phase >= EMAG_COUNT) {
-                            processEmagFrame(robot);
-                            current_state = STATE_IDLE;
-                            state_start_time = current_time;
-                            Serial.println("Measurement frame complete");
-                        } else if (phase_time < EMAG_ON_TIME_MS && total_phase == current_emag_index) {
-                            if (emag_readings[current_emag_index].count < MAX_SAMPLES_PER_EMAG) {
-                                uint16_t idx = emag_readings[current_emag_index].count;
-                                emag_readings[current_emag_index].x[idx] = mx;
-                                emag_readings[current_emag_index].y[idx] = my;
-                                emag_readings[current_emag_index].z[idx] = mz;
-                                emag_readings[current_emag_index].count++;
-                            }
-                        } else if (phase_time >= EMAG_ON_TIME_MS && total_phase > current_emag_index) {
-                            current_emag_index = total_phase;
+                        } else {
+                            pause_was_quiet = false;
                         }
                         break;
                     }
+
+                    case STATE_START_PULSES: {
+                        if (detectStartPulse(mx, my, mz, current_time)) {
+                            for (uint8_t i = 0; i < EMAG_COUNT; i++) {
+                                emag_readings[i].count = 0;
+                            }
+                            state_start_time = current_time;
+                            current_state = STATE_MEASURING;
+                        }
+                        break;
+                    }
+
+                    case STATE_MEASURING: {
+                        uint32_t elapsed_ms = current_time - state_start_time;
+                        const uint32_t slot_duration = EMAG_ON_TIME_MS + EMAG_GAP_TIME_MS;
+                        uint8_t emag_index = (uint8_t)(elapsed_ms / slot_duration);
+                        bool within_on_window = (elapsed_ms % slot_duration) < EMAG_ON_TIME_MS;
+
+                        if (emag_index < EMAG_COUNT && within_on_window) {
+                            EmagReading* r = &emag_readings[emag_index];
+                            if (r->count < MAX_SAMPLES_PER_EMAG) {
+                                r->x[r->count] = mx;
+                                r->y[r->count] = my;
+                                r->z[r->count] = mz;
+                                r->count++;
+                            }
+                        }
+
+                        if (emag_index >= EMAG_COUNT) {
+                            EmagFrameData frame;
+                            memcpy(frame.readings, emag_readings, sizeof(emag_readings));
+                            frame.bg_x = avgX.avg();
+                            frame.bg_y = avgY.avg();
+                            frame.bg_z = avgZ.avg();
+                            xQueueOverwrite(emag_frame_queue, &frame);
+
+                            for (uint8_t i = 0; i < EMAG_COUNT; i++) {
+                                emag_readings[i].count = 0;
+                            }
+                            pause_was_quiet = false;
+                            current_state = STATE_WAITING_PAUSE;
+                        }
+                        break;
+                    }
+
+                    case STATE_IDLE:
+                    default:
+                        current_state = STATE_WAITING_PAUSE;
+                        break;
                 }
             }
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(1));
+    }
+
+    mag.disableContinuousMode();
+}
+
+void PositionEstimator_CalcTask(void* pvParameters) {
+    Robot* robot = (Robot*)pvParameters;
+
+    if (robot == NULL || emag_frame_queue == NULL) {
+        Serial.println("ERROR: PositionEstimator_CalcTask bad parameters");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    EmagFrameData frame;
+
+    while (1) {
+        if (xQueueReceive(emag_frame_queue, &frame, portMAX_DELAY) == pdTRUE) {
+            if (!computePositionFromFrameData(&frame, robot)) {
+                Serial.println("WARNING: Position computation failed for frame");
+            }
+        }
     }
 }

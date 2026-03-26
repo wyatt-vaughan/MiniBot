@@ -4,23 +4,35 @@
 #include "robot.h"
 
 /**
- * Position Estimator Task
- * 
- * Priority: MEDIUM
+ * Position Estimator — Sensor Task
+ *
+ * Priority: HIGH (3)
+ * Core: 1
  * Responsible for:
- * - Estimating robot position based on wheel odometry
- * - Tracking step counts from stepper motors
- * - Continuously updating the robot's "true" position estimate
- * - Potentially fusing IMU or other sensor data (future enhancement)
- * 
- * Note: The position estimator always runs periodically and updates
- * the robot's true_x, true_y, and true_theta values. Other tasks can
- * call robot->updatePositionFromEstimate() to copy these values to
- * the active position when needed.
- * 
+ * - Communicating with the MMC5633 magnetometer at 2 kHz
+ * - Detecting the frame start signal (3 short pulses)
+ * - Using timing after the start signal to associate each sample
+ *   with the correct electromagnet slot
+ * - Posting a complete EmagFrameData to the internal queue after
+ *   all 6 electromagnet slots have been sampled
+ *
+ * @param pvParameters Unused (pass NULL or Robot*)
+ */
+void PositionEstimator_SensorTask(void* pvParameters);
+
+/**
+ * Position Estimator — Calculation Task
+ *
+ * Priority: MEDIUM (2)
+ * Core: 1
+ * Responsible for:
+ * - Blocking on the internal emag frame queue
+ * - Computing robot position
+ * - Updating the robot's true pose via robot->setTruePose()
+ *
  * @param pvParameters Pointer to Robot instance
  */
-void PositionEstimator_Task(void* pvParameters);
+void PositionEstimator_CalcTask(void* pvParameters);
 
 /**
  * Initialize the position estimator

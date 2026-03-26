@@ -11,4 +11,12 @@ typedef struct {
     float move_duration_ms;
 } MotionCommand;
 
+/**
+ * Motor test command structure passed from communicator to kinematics controller
+ */
+typedef struct {
+    float m0_velocity_rad_s;  // Motor 0 target velocity in rad/s
+    float m1_velocity_rad_s;  // Motor 1 target velocity in rad/s
+} MotorTestRequest;
+
 #endif // __MESSAGES_IPC_H__

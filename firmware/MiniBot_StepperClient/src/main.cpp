@@ -5,6 +5,7 @@ A FreeRTOS powered controller for a tiny 2 wheel robot.
 #include <Arduino.h>
 #include "robot.h"
 #include "motion_queue.h"
+#include "motor_test_queue.h"
 #include "kinematics_controller.h"
 #include "esp_now_communicator.h"
 #include "position_estimator.h"
@@ -14,10 +15,12 @@ A FreeRTOS powered controller for a tiny 2 wheel robot.
 
 static Robot robot;
 static MotionQueue motion_queue = NULL;
+static MotorTestQueue motor_test_queue = NULL;
 
 static TaskHandle_t kinematics_task_handle = NULL;
 static TaskHandle_t communicator_task_handle = NULL;
-static TaskHandle_t position_estimator_task_handle = NULL;
+static TaskHandle_t position_estimator_sensor_task_handle = NULL;
+static TaskHandle_t position_estimator_calc_task_handle = NULL;
 static TaskHandle_t battery_monitor_task_handle = NULL;
 static TaskHandle_t led_status_task_handle = NULL;
 
@@ -55,19 +58,34 @@ static bool create_tasks(void) {
     Serial.println("ESP-NOW Communicator task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
-        PositionEstimator_Task,
-        "PositionEstimator",
+        PositionEstimator_SensorTask,
+        "PositionEstimatorSensor",
+        4096,
+        (void*)&robot,
+        3,
+        &position_estimator_sensor_task_handle,
+        1
+    );
+    if (task_created != pdPASS) {
+        Serial.println("ERROR: Failed to create Position Estimator Sensor task");
+        return false;
+    }
+    Serial.println("Position Estimator Sensor task created successfully");
+
+    task_created = xTaskCreatePinnedToCore(
+        PositionEstimator_CalcTask,
+        "PositionEstimatorCalc",
         4096,
         (void*)&robot,
         2,
-        &position_estimator_task_handle,
-        0
+        &position_estimator_calc_task_handle,
+        1
     );
     if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create Position Estimator task");
+        Serial.println("ERROR: Failed to create Position Estimator Calc task");
         return false;
     }
-    Serial.println("Position Estimator task created successfully");
+    Serial.println("Position Estimator Calc task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
         BatteryMonitor_Task,
@@ -111,19 +129,26 @@ static bool initialize_modules(void) {
     }
     Serial.println("Motion queue created successfully");
     
+    motor_test_queue = MotorTestQueue_Create(MOTION_QUEUE_SIZE);
+    if (motor_test_queue == NULL) {
+        Serial.println("ERROR: Failed to create motor test queue");
+        return false;
+    }
+    Serial.println("Motor test queue created successfully");
+    
     if (!robot.initialize()) {
         Serial.println("ERROR: Failed to initialize robot");
         return false;
     }
     Serial.println("Robot initialized successfully");
     
-    if (!KinematicsController_Init(motion_queue)) {
+    if (!KinematicsController_Init(motion_queue, motor_test_queue)) {
         Serial.println("ERROR: Failed to initialize kinematics controller");
         return false;
     }
     Serial.println("Kinematics controller initialized successfully");
     
-    if (!EspNowCommunicator_Init(motion_queue)) {
+    if (!EspNowCommunicator_Init(motion_queue, motor_test_queue)) {
         Serial.println("ERROR: Failed to initialize ESP-NOW communicator");
         return false;
     }
@@ -157,7 +182,7 @@ void setup() {
 
     // Write device ID to NVS, ony do this one time. Persistant across reflashes.
     // TODO create a function to set ID based on current position on chess board
-    // setDeviceID(0x03);
+    // setDeviceID(0x04);
     
     uint8_t device_id = getDeviceID();
     if (device_id == 0xFF) {

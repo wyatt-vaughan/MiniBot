@@ -1,6 +1,11 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include "GUITask.h"
+#include "config.h"
+#if ENABLE_JOYSTICK_MODE
+  #include "JoystickTask.h"
+#else
+  #include "GUITask.h"
+#endif
 #include "CommunicatorTask.h"
 #include "QueueStructs.h"
 #include "ElectromagnetTask.h"
@@ -33,19 +38,37 @@ void setup() {
   // Initialize ESP-NOW
   initESPNow();
   
-  // Initialize GUI
+#if ENABLE_JOYSTICK_MODE
+  // Initialize Joystick mode
+  initJoystick();
+  Serial.println("Running in JOYSTICK MODE");
+#else
+  // Initialize GUI mode
   initGUI();
+  Serial.println("Running in GUI MODE");
+#endif
   
   // Initialize Electromagnets
-  initElectromagnets();
+  // initElectromagnets();
   
   // Initialize Python Serial communication
-  initPythonComm();
+  // initPythonComm();
   
   // Initialize I2C communication
-  initI2CComm();
+  // initI2CComm();
   
   // Create FreeRTOS Tasks
+#if ENABLE_JOYSTICK_MODE
+  xTaskCreatePinnedToCore(
+    joystickTask,      // Task function
+    "Joystick Task",   // Task name
+    4096,              // Stack size (bytes)
+    NULL,              // Parameter
+    2,                 // Priority
+    &joystickTaskHandle, // Task handle
+    1                  // Core (0 or 1)
+  );
+#else
   xTaskCreatePinnedToCore(
     guiTask,           // Task function
     "GUI Task",        // Task name
@@ -55,6 +78,7 @@ void setup() {
     &guiTaskHandle,    // Task handle
     1                  // Core (0 or 1)
   );
+#endif
   
   xTaskCreatePinnedToCore(
     communicatorTask,  // Task function
@@ -66,35 +90,35 @@ void setup() {
     0                  // Core (0 or 1)
   );
   
-  xTaskCreatePinnedToCore(
-    electromagnetTask, // Task function
-    "Emag Task",       // Task name
-    2048,              // Stack size (bytes)
-    NULL,              // Parameter
-    1,                 // Priority (lower than comm/gui)
-    &emagTaskHandle,   // Task handle
-    0                  // Core (0 or 1)
-  );
+  // xTaskCreatePinnedToCore(
+  //   electromagnetTask, // Task function
+  //   "Emag Task",       // Task name
+  //   2048,              // Stack size (bytes)
+  //   NULL,              // Parameter
+  //   1,                 // Priority (lower than comm/gui)
+  //   &emagTaskHandle,   // Task handle
+  //   0                  // Core (0 or 1)
+  // );
   
-  xTaskCreatePinnedToCore(
-    pythonCommTask,    // Task function
-    "Python Task",     // Task name
-    4096,              // Stack size (bytes)
-    NULL,              // Parameter
-    2,                 // Priority
-    &pythonCommTaskHandle, // Task handle
-    1                  // Core (0 or 1)
-  );
+  // xTaskCreatePinnedToCore(
+  //   pythonCommTask,    // Task function
+  //   "Python Task",     // Task name
+  //   4096,              // Stack size (bytes)
+  //   NULL,              // Parameter
+  //   2,                 // Priority
+  //   &pythonCommTaskHandle, // Task handle
+  //   1                  // Core (0 or 1)
+  // );
   
-  xTaskCreatePinnedToCore(
-    i2cCommTask,       // Task function
-    "I2C Task",        // Task name
-    4096,              // Stack size (bytes)
-    NULL,              // Parameter
-    2,                 // Priority
-    &i2cCommTaskHandle, // Task handle
-    0                  // Core (0 or 1)
-  );
+  // xTaskCreatePinnedToCore(
+  //   i2cCommTask,       // Task function
+  //   "I2C Task",        // Task name
+  //   4096,              // Stack size (bytes)
+  //   NULL,              // Parameter
+  //   2,                 // Priority
+  //   &i2cCommTaskHandle, // Task handle
+  //   0                  // Core (0 or 1)
+  // );
   
   Serial.println("Setup complete!");
 }

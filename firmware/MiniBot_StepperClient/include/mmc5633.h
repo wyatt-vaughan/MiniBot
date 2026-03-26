@@ -12,6 +12,7 @@ public:
     static constexpr uint8_t REG_XOUT0 = 0x00;
     static constexpr uint8_t REG_PRODUCT_ID = 0x39;
     static constexpr uint8_t REG_STATUS1 = 0x18;
+    static constexpr uint8_t REG_ODR = 0x1A;
     static constexpr uint8_t REG_CTRL0 = 0x1B;
     static constexpr uint8_t REG_CTRL1 = 0x1C;
     static constexpr uint8_t REG_CTRL2 = 0x1D;
@@ -31,7 +32,7 @@ public:
     uint32_t rawX = 0, rawY = 0, rawZ = 0;
     int8_t rawTemp = 0;
 
-    MMC5633NJL(TwoWire &wire = Wire) : _wire(wire) {}
+    MMC5633NJL(TwoWire &wire = Wire) : _wire(wire), _continuous_mode(false) {}
 
     bool begin(int sda_pin = -1, int scl_pin = -1, uint32_t i2c_freq = 400000) {
         if (sda_pin >= 0 && scl_pin >= 0) _wire.begin(sda_pin, scl_pin, i2c_freq);
@@ -43,28 +44,52 @@ public:
         if (!readRegister(REG_PRODUCT_ID, &pid)) return false;
         if (pid != 0x10) return false;
 
-        uint8_t ctrl0 = (1 << 5);
-        if (!writeRegister(REG_CTRL0, ctrl0)) return false;
+        if (!writeRegister(REG_CTRL1, 0x03)) return false;
+        if (!writeRegister(REG_ODR, 0xFF)) return false;
+        if (!writeRegister(REG_CTRL0, 0xA0)) return false;
 
-        uint8_t ctrl1 = (1 << 1);
-        if (!writeRegister(REG_CTRL1, ctrl1)) return false;
-
-        writeRegister(REG_CTRL2, 0x00);
+        disableContinuousMode();
 
         return true;
     }
 
     bool readMeasurement(uint32_t timeout_ms = 20) {
-        uint8_t ctrl0 = (1 << 5) | (1 << 0);
-        if (!writeRegister(REG_CTRL0, ctrl0)) return false;
+        if (_continuous_mode) {
+            // In continuous mode, just read the latest data
+            uint8_t buf[9] = {0};
+            if (!readRegisters(REG_XOUT0, buf, 9)) return false;
+            unpackRawXYZFromBuffer(buf, 9);
+            rawTemp = buf[8];
+            return true;
+        } else {
+            // On-demand mode: trigger measurement and wait
+            uint8_t ctrl0 = (1 << 5) | (1 << 0);
+            if (!writeRegister(REG_CTRL0, ctrl0)) return false;
 
-        if (!waitForMeasurementDone(timeout_ms)) return false;
+            if (!waitForMeasurementDone(timeout_ms)) return false;
 
-        uint8_t buf[9] = {0};
-        if (!readRegisters(REG_XOUT0, buf, 9)) return false;
+            uint8_t buf[9] = {0};
+            if (!readRegisters(REG_XOUT0, buf, 9)) return false;
 
-        unpackRawXYZFromBuffer(buf, 9);
-        rawTemp = buf[8];
+            unpackRawXYZFromBuffer(buf, 9);
+            rawTemp = buf[8];
+            return true;
+        }
+    }
+
+    bool enableContinuousMode() {
+        // Enable continuous measurement mode at 1000hz sampling
+        if (!writeRegister(REG_CTRL2, 0x90)) return false;
+        
+        _continuous_mode = true;
+        return true;
+    }
+
+    bool disableContinuousMode() {
+        // Disable continuous measurement mode
+        // TODO untested
+        if (!writeRegister(REG_CTRL2, 0x00)) return false;
+        _continuous_mode = false;
         return true;
     }
 
@@ -122,6 +147,7 @@ public:
 
 private:
     TwoWire &_wire;
+    bool _continuous_mode;
 
     bool waitForMeasurementDone(uint32_t timeout_ms) {
         uint32_t start = millis();
@@ -129,7 +155,6 @@ private:
             uint8_t status = 0;
             if (!readRegister(REG_STATUS1, &status)) return false;
             if (status & STAT1_MEAS_M_DONE) return true;
-            delay(1);
         }
         return false;
     }
