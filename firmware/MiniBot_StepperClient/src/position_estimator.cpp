@@ -51,8 +51,6 @@ static uint8_t detected_pulse_count = 0;
 static QueueHandle_t emag_frame_queue = NULL;
 
 bool PositionEstimator_Init(void) {
-    Wire.begin(SDA_PIN, SCL_PIN);
-
     emag_frame_queue = xQueueCreate(1, sizeof(EmagFrameData));
     if (emag_frame_queue == NULL) {
         Serial.println("ERROR: Failed to create emag frame queue");
@@ -210,6 +208,13 @@ void PositionEstimator_SensorTask(void* pvParameters) {
     while (1) {
         uint32_t current_time = millis();
         uint32_t current_micros = micros();
+        uint32_t elapsed_micros = current_micros - last_sample_time;
+
+        // If within 100us of next sample time, do a non-yielding wait
+        if ((elapsed_micros < EMAG_SAMPLE_PERIOD_US) && (elapsed_micros >= (EMAG_SAMPLE_PERIOD_US - 100))) {
+            delayMicroseconds(EMAG_SAMPLE_PERIOD_US - elapsed_micros);
+            current_micros = micros();
+        }
 
         if ((current_micros - last_sample_time) >= EMAG_SAMPLE_PERIOD_US) {
             last_sample_time = current_micros;
@@ -228,75 +233,75 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                 float mz_cal = mz - avgZ.avg();
                 float field_magnitude = sqrtf(mx_cal * mx_cal + my_cal * my_cal + mz_cal * mz_cal);
 
-                Serial.printf("%.3f\t%.3f\t%.3f\t%.3f\n", mx, my, mz, field_magnitude);
+                Serial.printf("%lu\t%.3f\t%.3f\t%.3f\t%.3f\n", current_micros, mx, my, mz, field_magnitude);
 
-                switch (current_state) {
+                // switch (current_state) {
 
-                    case STATE_WAITING_PAUSE: {
-                        if (field_magnitude < FIELD_THRESHOLD_GAUSS) {
-                            if (!pause_was_quiet) {
-                                pause_was_quiet = true;
-                                pause_quiet_start = current_time;
-                            } else if ((current_time - pause_quiet_start) >= EMAG_PAUSE_TIME_MS) {
-                                pulse_state = PULSE_IDLE;
-                                detected_pulse_count = 0;
-                                current_state = STATE_START_PULSES;
-                            }
-                        } else {
-                            pause_was_quiet = false;
-                        }
-                        break;
-                    }
+                //     case STATE_WAITING_PAUSE: {
+                //         if (field_magnitude < FIELD_THRESHOLD_GAUSS) {
+                //             if (!pause_was_quiet) {
+                //                 pause_was_quiet = true;
+                //                 pause_quiet_start = current_time;
+                //             } else if ((current_time - pause_quiet_start) >= EMAG_PAUSE_TIME_MS) {
+                //                 pulse_state = PULSE_IDLE;
+                //                 detected_pulse_count = 0;
+                //                 current_state = STATE_START_PULSES;
+                //             }
+                //         } else {
+                //             pause_was_quiet = false;
+                //         }
+                //         break;
+                //     }
 
-                    case STATE_START_PULSES: {
-                        if (detectStartPulse(mx, my, mz, current_time)) {
-                            for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-                                emag_readings[i].count = 0;
-                            }
-                            state_start_time = current_time;
-                            current_state = STATE_MEASURING;
-                        }
-                        break;
-                    }
+                //     case STATE_START_PULSES: {
+                //         if (detectStartPulse(mx, my, mz, current_time)) {
+                //             for (uint8_t i = 0; i < EMAG_COUNT; i++) {
+                //                 emag_readings[i].count = 0;
+                //             }
+                //             state_start_time = current_time;
+                //             current_state = STATE_MEASURING;
+                //         }
+                //         break;
+                //     }
 
-                    case STATE_MEASURING: {
-                        uint32_t elapsed_ms = current_time - state_start_time;
-                        const uint32_t slot_duration = EMAG_ON_TIME_MS + EMAG_GAP_TIME_MS;
-                        uint8_t emag_index = (uint8_t)(elapsed_ms / slot_duration);
-                        bool within_on_window = (elapsed_ms % slot_duration) < EMAG_ON_TIME_MS;
+                //     case STATE_MEASURING: {
+                //         uint32_t elapsed_ms = current_time - state_start_time;
+                //         const uint32_t slot_duration = EMAG_ON_TIME_MS + EMAG_GAP_TIME_MS;
+                //         uint8_t emag_index = (uint8_t)(elapsed_ms / slot_duration);
+                //         bool within_on_window = (elapsed_ms % slot_duration) < EMAG_ON_TIME_MS;
 
-                        if (emag_index < EMAG_COUNT && within_on_window) {
-                            EmagReading* r = &emag_readings[emag_index];
-                            if (r->count < MAX_SAMPLES_PER_EMAG) {
-                                r->x[r->count] = mx;
-                                r->y[r->count] = my;
-                                r->z[r->count] = mz;
-                                r->count++;
-                            }
-                        }
+                //         if (emag_index < EMAG_COUNT && within_on_window) {
+                //             EmagReading* r = &emag_readings[emag_index];
+                //             if (r->count < MAX_SAMPLES_PER_EMAG) {
+                //                 r->x[r->count] = mx;
+                //                 r->y[r->count] = my;
+                //                 r->z[r->count] = mz;
+                //                 r->count++;
+                //             }
+                //         }
 
-                        if (emag_index >= EMAG_COUNT) {
-                            EmagFrameData frame;
-                            memcpy(frame.readings, emag_readings, sizeof(emag_readings));
-                            frame.bg_x = avgX.avg();
-                            frame.bg_y = avgY.avg();
-                            frame.bg_z = avgZ.avg();
-                            xQueueOverwrite(emag_frame_queue, &frame);
+                //         if (emag_index >= EMAG_COUNT) {
+                //             EmagFrameData frame;
+                //             memcpy(frame.readings, emag_readings, sizeof(emag_readings));
+                //             frame.bg_x = avgX.avg();
+                //             frame.bg_y = avgY.avg();
+                //             frame.bg_z = avgZ.avg();
+                //             xQueueOverwrite(emag_frame_queue, &frame);
 
-                            for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-                                emag_readings[i].count = 0;
-                            }
-                            pause_was_quiet = false;
-                            current_state = STATE_WAITING_PAUSE;
-                        }
-                        break;
-                    }
+                //             for (uint8_t i = 0; i < EMAG_COUNT; i++) {
+                //                 emag_readings[i].count = 0;
+                //             }
+                //             pause_was_quiet = false;
+                //             current_state = STATE_WAITING_PAUSE;
+                //         }
+                //         break;
+                //     }
 
-                    case STATE_IDLE:
-                    default:
-                        current_state = STATE_WAITING_PAUSE;
-                        break;
-                }
+                //     case STATE_IDLE:
+                //     default:
+                //         current_state = STATE_WAITING_PAUSE;
+                //         break;
+                // }
             }
         }
 
@@ -323,5 +328,6 @@ void PositionEstimator_CalcTask(void* pvParameters) {
                 Serial.println("WARNING: Position computation failed for frame");
             }
         }
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }

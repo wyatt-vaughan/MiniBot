@@ -53,9 +53,9 @@ bool StepperDriver::setMicrostepping(bool step_lvl, bool dir_lvl) {
 bool StepperDriver::resetDriver() {
     disable();
     digitalWrite(reset_pin, LOW);
-    delay(5);
+    vTaskDelay(pdMS_TO_TICKS(5));
     digitalWrite(reset_pin, HIGH);
-    delay(5);
+    vTaskDelay(pdMS_TO_TICKS(5));
     return true;
 }
 
@@ -494,27 +494,26 @@ void Robot::executeRotation(float angle_rad, float target_time_s) {
     MOTION_LOG("  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld\n",
                profile.max_velocity_mm_s, profile.total_time_s * 1000, profile.total_steps);
     
-    // Execute motion
+    // Execute motion: compare integrated expected distance to actual, step when behind
     uint32_t start_us = micros();
     float step_distance_mm = 1.0f / steps_per_mm;
-    
-    for (int32_t step = 0; step < profile.total_steps; step++) {
+    float distance_done = 0;
+    int32_t steps_done = 0;
+
+    while (steps_done < profile.total_steps) {
         float elapsed_s = (micros() - start_us) / 1000000.0f;
-        float velocity = getVelocityAtTime(profile, elapsed_s);
-        
-        // Calculate delay for this step
-        uint32_t step_delay_us = (velocity > 0.01f) ? 
-            (uint32_t)(step_distance_mm / velocity * 1000000.0f) : 10000;
-        step_delay_us = fmin(step_delay_us, 50000);  // Cap at 50ms
-        
-        left_wheel.step();
-        right_wheel.step();
-        
-        if (step_delay_us > 1000) {
-            vTaskDelay(pdMS_TO_TICKS(step_delay_us / 1000));
+        float expected = integrateDistance(profile, elapsed_s);
+
+        if (distance_done < expected) {
+            left_wheel.step();
+            right_wheel.step();
+            steps_done++;
+            distance_done += step_distance_mm;
         } else {
-            delayMicroseconds(step_delay_us);
+            delayMicroseconds(50);
         }
+
+        if (elapsed_s > profile.total_time_s + 1.0f) break;
     }
 }
 
@@ -544,26 +543,26 @@ void Robot::executeStraightLine(float distance_mm, float target_time_s) {
                profile.max_velocity_mm_s, profile.total_time_s * 1000, 
                profile.total_steps, forward ? "FWD" : "REV");
     
-    // Execute motion
+    // Execute motion: compare integrated expected distance to actual, step when behind
     uint32_t start_us = micros();
     float step_distance_mm = 1.0f / steps_per_mm;
-    
-    for (int32_t step = 0; step < profile.total_steps; step++) {
+    float distance_done = 0;
+    int32_t steps_done = 0;
+
+    while (steps_done < profile.total_steps) {
         float elapsed_s = (micros() - start_us) / 1000000.0f;
-        float velocity = getVelocityAtTime(profile, elapsed_s);
-        
-        uint32_t step_delay_us = (velocity > 0.01f) ? 
-            (uint32_t)(step_distance_mm / velocity * 1000000.0f) : 10000;
-        step_delay_us = fmin(step_delay_us, 50000);
-        
-        left_wheel.step();
-        right_wheel.step();
-        
-        if (step_delay_us > 1000) {
-            vTaskDelay(pdMS_TO_TICKS(step_delay_us / 1000));
+        float expected = integrateDistance(profile, elapsed_s);
+
+        if (distance_done < expected) {
+            left_wheel.step();
+            right_wheel.step();
+            steps_done++;
+            distance_done += step_distance_mm;
         } else {
-            delayMicroseconds(step_delay_us);
+            delayMicroseconds(50);
         }
+
+        if (elapsed_s > profile.total_time_s + 1.0f) break;
     }
 }
 
