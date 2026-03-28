@@ -2,6 +2,14 @@
 #define __MESSAGES_IPC_H__
 
 /**
+ * 2D position of a single electromagnet on the platform (mm)
+ */
+typedef struct {
+    float x;
+    float y;
+} EmagPosition;
+
+/**
  * Motion command structure passed from communicator to kinematics controller
  */
 typedef struct {
@@ -18,5 +26,13 @@ typedef struct {
     float m0_velocity_rad_s;  // Motor 0 target velocity in rad/s
     float m1_velocity_rad_s;  // Motor 1 target velocity in rad/s
 } MotorTestRequest;
+
+/**
+ * Result of a pos-sync start-pulse search, sent from the position estimator
+ * to the communicator when leaving STATE_START_PULSES.
+ */
+typedef struct {
+    bool detected;
+} PosSyncResult;
 
 #endif // __MESSAGES_IPC_H__

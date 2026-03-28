@@ -1,5 +1,8 @@
 #include "CommunicatorTask.h"
 #include "QueueStructs.h"
+#include "ElectromagnetTask.h"
+#include "config.h"
+#include <esp_timer.h>
 
 // Task handle
 TaskHandle_t commTaskHandle = NULL;
@@ -9,6 +12,7 @@ uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // ACK tracking
 static QueueHandle_t ackQueue = NULL;
+static QueueHandle_t nackQueue = NULL;
 static QueueHandle_t magFieldQueue = NULL;
 
 // ESP-NOW callback when data is sent
@@ -87,15 +91,31 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
       return;
     }
   }
-  
-  Serial.printf("Warning: Unhandled message type or size mismatch (len=%d, AckMsg=%d, MagField=%d)\n", 
-               len, sizeof(AckMessage), sizeof(MagneticFieldResponse));
+
+  // Try to handle as NackMessage
+  if (len == sizeof(NackMessage)) {
+    NackMessage nack;
+    memcpy(&nack, incomingData, sizeof(nack));
+    if (nack.msg_type == MSG_TYPE_NACK_MESSAGE) {
+      Serial.printf("NACK received from robot 0x%02X, err_type=%d\n", nack.responderID, nack.err_type);
+      if (nackQueue != NULL) {
+        if (xQueueSend(nackQueue, &nack, 0) != pdPASS) {
+          Serial.println("  -> NACK queue full!");
+        }
+      }
+      return;
+    }
+  }
+
+  Serial.printf("Warning: Unhandled message type or size mismatch (len=%d, AckMsg=%d, NackMsg=%d, MagField=%d)\n",
+               len, sizeof(AckMessage), sizeof(NackMessage), sizeof(MagneticFieldResponse));
 }
 
 // Initialize ESP-NOW
 void initESPNow() {
   // Create ACK queue
   ackQueue = xQueueCreate(10, sizeof(AckMessage));
+  nackQueue = xQueueCreate(10, sizeof(NackMessage));
   magFieldQueue = xQueueCreate(10, sizeof(MagneticFieldResponse));
   
   // Initialize ESP-NOW
@@ -333,6 +353,61 @@ void communicatorTask(void *parameter) {
           Serial.printf("Error sending position command: %d\n", result);
         }
         }  // End of GUI command handling
+      } else if (msg.commandType == CMD_TYPE_POS_SYNC) {
+        // Broadcast PosSyncCommand to all units
+        PosSyncCommand syncCmd;
+        syncCmd.targetID = 0xFF;
+        syncCmd.msg_type = MSG_TYPE_POS_SYNC_COMMAND;
+        syncCmd.timestamp = (uint32_t)esp_timer_get_time();
+        syncCmd.timeout_ms = 2 * EMAG_FRAME_LEN_MS;
+
+        Serial.printf("Sending PosSyncCommand to all units (timeout=%dms)\n", syncCmd.timeout_ms);
+
+        // Clear any stale ACKs and NACKs from previous transactions
+        AckMessage tempAck;
+        while (xQueueReceive(ackQueue, &tempAck, 0) == pdPASS) {}
+        NackMessage tempNack;
+        while (xQueueReceive(nackQueue, &tempNack, 0) == pdPASS) {}
+
+        esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&syncCmd, sizeof(syncCmd));
+        if (result == ESP_OK) {
+          Serial.println("PosSyncCommand broadcast sent");
+
+          // Trigger local sync pulse on this device's emags
+          triggerSyncPulse();
+
+          // Collect ACK/NACK responses for 5 * EMAG_FRAME_LEN_MS
+          uint32_t collectStart = millis();
+          while ((millis() - collectStart) < (5 * EMAG_FRAME_LEN_MS)) {
+            AckMessage ack;
+            if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(5)) == pdPASS) {
+              if (ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+                Serial.printf("Sync ACK from robot 0x%02X\n", ack.responderID);
+                GUIStatus syncStatus = {};
+                syncStatus.targetID = ack.responderID;
+                syncStatus.ackReceived = true;
+                syncStatus.batteryVoltage = -1.0f;
+                syncStatus.syncStatus = 1;
+                broadcastStatus(syncStatus);
+              }
+            }
+            NackMessage nack;
+            if (xQueueReceive(nackQueue, &nack, 0) == pdPASS) {
+              if (nack.msg_type == MSG_TYPE_NACK_MESSAGE) {
+                Serial.printf("Sync NACK from robot 0x%02X (err=%d)\n", nack.responderID, nack.err_type);
+                GUIStatus syncStatus = {};
+                syncStatus.targetID = nack.responderID;
+                syncStatus.ackReceived = false;
+                syncStatus.batteryVoltage = -1.0f;
+                syncStatus.syncStatus = 2;
+                broadcastStatus(syncStatus);
+              }
+            }
+          }
+          Serial.println("Sync response collection window closed");
+        } else {
+          Serial.printf("PosSyncCommand send failed: %d\n", result);
+        }
       }  // End of command type check
     }
     

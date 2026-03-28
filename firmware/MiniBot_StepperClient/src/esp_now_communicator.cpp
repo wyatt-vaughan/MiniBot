@@ -291,6 +291,21 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
             send_mag_field_response(mac_addr);
             break;
         }
+
+        case MSG_TYPE_POS_SYNC_COMMAND: {
+            if (len < sizeof(PosSyncCommand)) {
+                Serial.println("ERROR: PosSyncCommand too short");
+                send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
+                return;
+            }
+
+            PosSyncCommand* cmd = (PosSyncCommand*)data;
+            if (!PositionEstimator_StartSync(cmd->timeout_ms)) {
+                Serial.println("ERROR: Sync already in progress");
+                send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
+            }
+            break;
+        }
         
         default:
             send_nack_message(mac_addr, ERR_UNKNOWN_MSG);
@@ -336,7 +351,20 @@ void EspNowCommunicator_Task(void* pvParameters) {
         if (has_pending_completion_ack && !g_robot_ptr->isMoving()) {
             send_completion_ack_if_pending();
         }
-        
+
+        PosSyncResult sync_result;
+        QueueHandle_t sync_q = PositionEstimator_GetSyncResultQueue();
+        if (sync_q != NULL && xQueueReceive(sync_q, &sync_result, 0) == pdTRUE) {
+            // It is expected that all pieces will be sending this result at the same time,
+            // so a random delay is added to reduce chance of buffer overflows
+            vTaskDelay(pdMS_TO_TICKS(esp_random() % 101));
+            if (sync_result.detected) {
+                send_ack_message(last_sender_mac);
+            } else {
+                send_nack_message(last_sender_mac, ERR_SYNC_TIMEOUT);
+            }
+        }
+
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }

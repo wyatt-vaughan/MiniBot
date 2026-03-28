@@ -8,7 +8,8 @@
 // Command type discriminator
 enum CommandType {
   CMD_TYPE_GUI = 0,
-  CMD_TYPE_MOT_TEST = 1
+  CMD_TYPE_MOT_TEST = 1,
+  CMD_TYPE_POS_SYNC = 2
 };
 
 // Internal queue message types
@@ -42,6 +43,7 @@ struct GUIStatus {
   float magnetY_gauss;
   float magnetZ_gauss;
   bool magnetFieldValid;
+  uint8_t syncStatus = 0;   // 0=no update, 1=ACK, 2=NACK
 };
 
 // Queue handles

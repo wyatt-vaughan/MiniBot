@@ -110,28 +110,25 @@
 // Electromagnet Positioning System Configuration
 // ============================================================================
 
-// Frame structure timing (all in milliseconds)
-#define EMAG_PAUSE_TIME_MS           100    // Quiet period required before frame start
-#define EMAG_START_PULSE_COUNT       3      // Number of start pulses
-#define EMAG_START_PULSE_ON_MS       3      // Start pulse on duration
-#define EMAG_START_PULSE_OFF_MS      3      // Start pulse off duration
-#define EMAG_START_TOTAL_MS          (EMAG_START_PULSE_COUNT * (EMAG_START_PULSE_ON_MS + EMAG_START_PULSE_OFF_MS))
-#define EMAG_MEASUREMENT_PHASE_MS    60     // Total measurement window duration
-#define EMAG_OFF_TIME_BETWEEN_MS     18     // Trailing off time after measurement phase
-#define EMAG_TOTAL_FRAME_MS          (EMAG_PAUSE_TIME_MS + EMAG_START_TOTAL_MS + EMAG_MEASUREMENT_PHASE_MS + EMAG_OFF_TIME_BETWEEN_MS)
+// Electromagnet positions (x, y) in mm relative to the platform origin
+// Add one entry per electromagnet; array length must match EMAG_COUNT
+#define EMAG_POSITIONS_MM            { {0.0f, 0.0f}, {125.0f, 0.0f} }
 
-// Electromagnet slot timing
-#define EMAG_COUNT                   6      // Number of electromagnets per frame
-#define EMAG_ON_TIME_MS              12     // Electromagnet on duration per slot
-#define EMAG_GAP_TIME_MS             3      // Gap between slots
-#define EMAG_TRIM_MS                 1      // Samples to trim from slot leading/trailing edges
+// Electromagnet frame timing setup
+#define EMAG_FRAME_LEN_MS            100    // Total frame length
+#define EMAG_COUNT                   2      // Number of electromagnets in platform
+#define EMAG_FWD_ON_TIME_MS          6      // How long forward power is applied
+#define EMAG_REV_ON_TIME_MS          6      // How long reverse power is applied
+#define EMAG_GAP_TIME_MS             1      // Time between changing electromagnet states
+#define EMAG_TRIM_MS                 1      // Samples closer than this to state changes are ignored
 
 // Sampling
 #define EMAG_SAMPLE_PERIOD_US        1000   // 1 kHz sampling period (µs)
-#define MAX_SAMPLES_PER_EMAG         ((EMAG_ON_TIME_MS * 1000) / EMAG_SAMPLE_PERIOD_US)
+#define MAX_SAMPLES_PER_EMAG         ((EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS) * 1000 / EMAG_SAMPLE_PERIOD_US)
 
 // Detection thresholds
 #define FIELD_THRESHOLD_GAUSS        0.5f   // Minimum field magnitude to detect emag active
+#define EMAG_MIN_SIGNAL_GAUSS        0.3f   // Minimum fwd-rev differential magnitude to consider an emag reading valid
 #define PULSE_ON_MIN_MS              2      // Start pulse on-time valid range min
 #define PULSE_ON_MAX_MS              4      // Start pulse on-time valid range max
 #define PULSE_OFF_MIN_MS             2      // Start pulse off-time valid range min

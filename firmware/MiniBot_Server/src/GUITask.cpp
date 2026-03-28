@@ -63,6 +63,10 @@ const char index_html[] PROGMEM = R"rawliteral(
       </label>
       <span id="emagStatus" style="margin-left: 15px; color: #888;">OFF</span>
     </div>
+    <div class="control-row">
+      <span class="control-label">Position Sync:</span>
+      <button onclick="sendSyncCommand()" style="width: auto; padding: 8px 20px; background: #FF9800;">SYNC POSITIONS</button>
+    </div>
   </div>
   
   <div class="grid" id="robotGrid"></div>
@@ -130,6 +134,11 @@ const char index_html[] PROGMEM = R"rawliteral(
       console.log('Electromagnet: ' + message);
     }
 
+    function sendSyncCommand() {
+      websocket.send('sync');
+      console.log('Sync command sent');
+    }
+
     function updateStatus(id) {
       var data = robotData[id];
       if (data) {
@@ -159,6 +168,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             'Last Update: <span class="status-value">' + data.ts + ' ms</span>';
           document.getElementById('batt_' + id).innerHTML = 
             'Battery: <span class="status-value">' + data.batt.toFixed(2) + 'V</span>';
+        }
+        if (data.syncStatus === 1) {
+          document.getElementById('sync_' + id).innerHTML =
+            'Sync: <span class="status-value">ACK &#10003;</span>';
+        } else if (data.syncStatus === 2) {
+          document.getElementById('sync_' + id).innerHTML =
+            'Sync: <span class="status-error">NACK &#10007;</span>';
         }
       }
     }
@@ -202,11 +218,12 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div id="ang_${i}" class="status-label">Angle: --</div>
             <div id="ts_${i}" class="status-label">Last Update: --</div>
             <div id="batt_${i}" class="status-label">Battery: --</div>
+            <div id="sync_${i}" class="status-label">Sync: --</div>
           </div>
         `;
         
         grid.appendChild(cell);
-        robotData[i] = {id: i, x: 0, y: 0, angle: 0, ts: 0, batt: 0, ack: true, magX: 0, magY: 0, magZ: 0, magValid: false};
+        robotData[i] = {id: i, x: 0, y: 0, angle: 0, ts: 0, batt: 0, ack: true, magX: 0, magY: 0, magZ: 0, magValid: false, syncStatus: 0};
       }
     }
 
@@ -239,7 +256,9 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
       // Check message type: "cmd,..." or "req,..."
       if (message.startsWith("cmd,")) {
         // Parse command: format "cmd,id,x,y,angle,duration"
-        GUICommand cmd;
+        CommandMessage msg = {};
+        msg.commandType = CMD_TYPE_GUI;
+        GUICommand &cmd = msg.data.guiCmd;
         cmd.requestType = 0;  // Position command
         
         int idx1 = message.indexOf(',', 4);  // After "cmd,"
@@ -262,7 +281,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           cmd.duration = message.substring(idx4 + 1).toFloat();
           
           // Send to command queue
-          if (xQueueSend(commandQueue, &cmd, 0) == pdPASS) {
+          if (xQueueSend(commandQueue, &msg, 0) == pdPASS) {
             Serial.printf("Command queued for robot 0x%02X: x=%.2f y=%.2f a=%.2f d=%.2f\n", 
                          cmd.targetID, cmd.x, cmd.y, cmd.angle, cmd.duration);
           } else {
@@ -273,7 +292,9 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         }
       } else if (message.startsWith("req,")) {
         // Parse request: format "req,id"
-        GUICommand cmd;
+        CommandMessage msg = {};
+        msg.commandType = CMD_TYPE_GUI;
+        GUICommand &cmd = msg.data.guiCmd;
         cmd.requestType = 1;  // Position request
         
         String targetIdStr = message.substring(4);
@@ -290,14 +311,16 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         cmd.duration = 0;
         
         // Send to command queue
-        if (xQueueSend(commandQueue, &cmd, 0) == pdPASS) {
+        if (xQueueSend(commandQueue, &msg, 0) == pdPASS) {
           Serial.printf("Position request queued for robot 0x%02X\n", cmd.targetID);
         } else {
           Serial.println("Command queue full!");
         }
       } else if (message.startsWith("mag,")) {
         // Parse magnet field request: format "mag,id"
-        GUICommand cmd;
+        CommandMessage msg = {};
+        msg.commandType = CMD_TYPE_GUI;
+        GUICommand &cmd = msg.data.guiCmd;
         cmd.requestType = 2;  // Magnet field request
         
         String targetIdStr = message.substring(4);
@@ -314,7 +337,7 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         cmd.duration = 0;
         
         // Send to command queue
-        if (xQueueSend(commandQueue, &cmd, 0) == pdPASS) {
+        if (xQueueSend(commandQueue, &msg, 0) == pdPASS) {
           Serial.printf("Magnet field request queued for robot 0x%02X\n", cmd.targetID);
         } else {
           Serial.println("Command queue full!");
@@ -324,6 +347,15 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         int enabled = message.substring(5).toInt();
         setElectromagnetEnabled(enabled == 1);
         Serial.printf("Electromagnet control set to: %s\n", enabled ? "ENABLED" : "DISABLED");
+      } else if (message == "sync") {
+        // Position sync: broadcast PosSyncCommand to all units
+        CommandMessage syncMsg = {};
+        syncMsg.commandType = CMD_TYPE_POS_SYNC;
+        if (xQueueSend(commandQueue, &syncMsg, 0) == pdPASS) {
+          Serial.println("Pos sync command queued");
+        } else {
+          Serial.println("Command queue full!");
+        }
       }
     }
   }
@@ -385,6 +417,9 @@ void guiTask(void *parameter) {
         robotStatus[status.targetID].magnetY_gauss = status.magnetY_gauss;
         robotStatus[status.targetID].magnetZ_gauss = status.magnetZ_gauss;
         robotStatus[status.targetID].magnetFieldValid = status.magnetFieldValid;
+        if (status.syncStatus != 0) {
+          robotStatus[status.targetID].syncStatus = status.syncStatus;
+        }
         
         // Only send if we have connected clients and queue isn't full
         if (ws.count() > 0) {
@@ -399,7 +434,8 @@ void guiTask(void *parameter) {
                        ",\"magX\":" + String(robotStatus[status.targetID].magnetX_gauss, 2) +
                        ",\"magY\":" + String(robotStatus[status.targetID].magnetY_gauss, 2) +
                        ",\"magZ\":" + String(robotStatus[status.targetID].magnetZ_gauss, 2) +
-                       ",\"magValid\":" + String(robotStatus[status.targetID].magnetFieldValid ? "true" : "false") + "}";
+                       ",\"magValid\":" + String(robotStatus[status.targetID].magnetFieldValid ? "true" : "false") +
+                       ",\"syncStatus\":" + String(robotStatus[status.targetID].syncStatus) + "}";
           
           // Try to send, but don't block if queue is full
           ws.textAll(json);

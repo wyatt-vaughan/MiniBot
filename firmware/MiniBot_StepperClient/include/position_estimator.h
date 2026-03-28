@@ -2,6 +2,53 @@
 #define __POSITION_ESTIMATOR_H__
 
 #include "robot.h"
+#include "messages_ipc.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+
+struct EmagReading {
+    float x[MAX_SAMPLES_PER_EMAG];
+    float y[MAX_SAMPLES_PER_EMAG];
+    float z[MAX_SAMPLES_PER_EMAG];
+    bool is_forward[MAX_SAMPLES_PER_EMAG];
+    uint16_t count;
+};
+
+struct EmagFrameData {
+    EmagReading readings[EMAG_COUNT];
+    float bg_x;
+    float bg_y;
+    float bg_z;
+};
+
+struct ProcessedEmagData {
+    bool use_reading = false;
+    float magnitude_G = 0.0f;
+    float azimuth_angle_rad = 0.0f;
+    float elevation_angle_rad = 0.0f;
+};
+
+struct CalculatedPosition {
+    uint8_t emag_index_0 = 0xFF;
+    uint8_t emag_index_1 = 0xFF;
+    float pos_x_mm = 0.0f;
+    float pos_y_mm = 0.0f;
+    float ang_rad = 0.0f;
+    float confidence = 0.0f;
+};
+
+enum PositionEstState {
+    STATE_START_PULSES,
+    STATE_MEASURING,
+    STATE_IDLE,
+    STATE_SYNC_LOST
+};
+
+enum PulseDetectState {
+    PULSE_IDLE,
+    PULSE_HIGH,
+    PULSE_LOW
+};
 
 /**
  * Position Estimator — Sensor Task
@@ -52,5 +99,21 @@ bool PositionEstimator_Init(void);
  * @return true on success, false if magnetometer not initialized
  */
 bool PositionEstimator_GetLatestMagneticField(float* x, float* y, float* z);
+
+/**
+ * Returns the queue handle used to receive PosSyncResult items.
+ * The communicator task should receive from this queue to send ack/nack.
+ */
+QueueHandle_t PositionEstimator_GetSyncResultQueue(void);
+
+/**
+ * Trigger start-pulse search using the state machine. Non-blocking.
+ * On exit from STATE_START_PULSES a PosSyncResult is posted to the sync
+ * result queue (retrieved via PositionEstimator_GetSyncResultQueue).
+ * Returns false if a search is already in progress.
+ *
+ * @param timeout_ms  Maximum time to search (ms)
+ */
+bool PositionEstimator_StartSync(uint16_t timeout_ms);
 
 #endif // __POSITION_ESTIMATOR_H__

@@ -10,6 +10,7 @@ from .ai_planner import AI_Planner
 from .astar_planner import AStarPlanner
 from .astar_optimized import AStarOptimized
 from .visual_planner import VisualSimulationPlanner
+from .force_planner import ForceSimulationPlanner
 from . import utils
 
 __all__ = [
@@ -25,7 +26,7 @@ __all__ = [
     'PieceCommandSequence', 'ExecutionPlan', 'SimulatorState',
     
     # Planners
-    'PathPlanner', 'SequentialPathPlanner', 'AI_Planner', 'AStarPlanner', 'AStarOptimized', 'VisualSimulationPlanner',
+    'PathPlanner', 'SequentialPathPlanner', 'AI_Planner', 'AStarPlanner', 'AStarOptimized', 'VisualSimulationPlanner', 'ForceSimulationPlanner',
     
     # Utils
     'utils',

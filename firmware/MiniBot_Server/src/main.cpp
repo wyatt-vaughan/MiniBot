@@ -11,6 +11,7 @@
 #include "ElectromagnetTask.h"
 #include "PythonCommTask.h"
 #include "I2CCommTask.h"
+#include "LEDStatusTask.h"
 
 // WiFi Configuration
 const char* ssid = "ChessBot-Server";
@@ -49,7 +50,10 @@ void setup() {
 #endif
   
   // Initialize Electromagnets
-  // initElectromagnets();
+  initElectromagnets();
+
+  // Initialize LED status indicator
+  initLEDStatus();
   
   // Initialize Python Serial communication
   // initPythonComm();
@@ -90,15 +94,25 @@ void setup() {
     0                  // Core (0 or 1)
   );
   
-  // xTaskCreatePinnedToCore(
-  //   electromagnetTask, // Task function
-  //   "Emag Task",       // Task name
-  //   2048,              // Stack size (bytes)
-  //   NULL,              // Parameter
-  //   1,                 // Priority (lower than comm/gui)
-  //   &emagTaskHandle,   // Task handle
-  //   0                  // Core (0 or 1)
-  // );
+  xTaskCreatePinnedToCore(
+    electromagnetTask, // Task function
+    "Emag Task",       // Task name
+    2048,              // Stack size (bytes)
+    NULL,              // Parameter
+    1,                 // Priority (lower than comm/gui)
+    &emagTaskHandle,   // Task handle
+    0                  // Core (0 or 1)
+  );
+
+  xTaskCreatePinnedToCore(
+    ledStatusTask,        // Task function
+    "LED Task",           // Task name
+    2048,                 // Stack size (bytes)
+    NULL,                 // Parameter
+    1,                    // Priority
+    &ledStatusTaskHandle, // Task handle
+    1                     // Core (0 or 1)
+  );
   
   // xTaskCreatePinnedToCore(
   //   pythonCommTask,    // Task function

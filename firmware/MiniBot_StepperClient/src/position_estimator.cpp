@@ -5,41 +5,14 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-struct EmagReading {
-    float x[MAX_SAMPLES_PER_EMAG];
-    float y[MAX_SAMPLES_PER_EMAG];
-    float z[MAX_SAMPLES_PER_EMAG];
-    uint16_t count;
-};
-
-struct EmagFrameData {
-    EmagReading readings[EMAG_COUNT];
-    float bg_x;
-    float bg_y;
-    float bg_z;
-};
-
-enum PositionEstState {
-    STATE_WAITING_PAUSE,
-    STATE_START_PULSES,
-    STATE_MEASURING,
-    STATE_IDLE
-};
-
-enum PulseDetectState {
-    PULSE_IDLE,
-    PULSE_HIGH,
-    PULSE_LOW
-};
-
 static MMC5633NJL mag;
 static RollingAverage<10> avgX;
 static RollingAverage<10> avgY;
 static RollingAverage<10> avgZ;
 static bool mag_initialized = false;
 
-static EmagReading emag_readings[EMAG_COUNT];
-static PositionEstState current_state = STATE_WAITING_PAUSE;
+static EmagFrameData current_frame;
+static PositionEstState current_state = STATE_IDLE;
 static uint32_t state_start_time = 0;
 static uint8_t current_emag_index = 0;
 static uint8_t start_pulse_count = 0;
@@ -49,11 +22,24 @@ static uint32_t pulse_transition_time = 0;
 static uint8_t detected_pulse_count = 0;
 
 static QueueHandle_t emag_frame_queue = NULL;
+static QueueHandle_t sync_result_queue = NULL;
+
+static uint32_t pulse_detected_time_ms = 0;
+static uint32_t sync_deadline_ms      = 0;
+static bool synced = false;
+
+static const float emag_positions[][2] = EMAG_POSITIONS_MM;
 
 bool PositionEstimator_Init(void) {
     emag_frame_queue = xQueueCreate(1, sizeof(EmagFrameData));
     if (emag_frame_queue == NULL) {
         Serial.println("ERROR: Failed to create emag frame queue");
+        return false;
+    }
+
+    sync_result_queue = xQueueCreate(1, sizeof(PosSyncResult));
+    if (sync_result_queue == NULL) {
+        Serial.println("ERROR: Failed to create sync result queue");
         return false;
     }
 
@@ -116,73 +102,227 @@ static void trimAndAverageSamples(const EmagReading* reading, float* avg_x, floa
     }
 }
 
-static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robot) {
-    Serial.println("Computing position from frame data...TODO :)");
-    return false;
+static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData* processed_data) {
+    uint8_t valid_count = 0;
+
+    for (uint8_t i = 0; i < EMAG_COUNT; i++) {
+        const EmagReading* r = &frame->readings[i];
+        Serial.printf("--- EMAG[%u]  samples=%u ---\n", i, r->count);
+
+        float sum_fwd_x = 0.0f, sum_fwd_y = 0.0f, sum_fwd_z = 0.0f;
+        uint16_t fwd_count = 0;
+        float sum_rev_x = 0.0f, sum_rev_y = 0.0f, sum_rev_z = 0.0f;
+        uint16_t rev_count = 0;
+
+        for (uint16_t s = 0; s < r->count; s++) {
+            if (r->is_forward[s]) {
+                sum_fwd_x += r->x[s]; sum_fwd_y += r->y[s]; sum_fwd_z += r->z[s];
+                fwd_count++;
+            } else {
+                sum_rev_x += r->x[s]; sum_rev_y += r->y[s]; sum_rev_z += r->z[s];
+                rev_count++;
+            }
+        }
+
+        if (fwd_count > 0 && rev_count > 0) {
+            float inv_fwd = 1.0f / fwd_count;
+            float avg_fwd_x = sum_fwd_x * inv_fwd;
+            float avg_fwd_y = sum_fwd_y * inv_fwd;
+            float avg_fwd_z = sum_fwd_z * inv_fwd;
+
+            float inv_rev = 1.0f / rev_count;
+            float avg_rev_x = sum_rev_x * inv_rev;
+            float avg_rev_y = sum_rev_y * inv_rev;
+            float avg_rev_z = sum_rev_z * inv_rev;
+
+            float diff_x = avg_fwd_x - avg_rev_x;
+            float diff_y = avg_fwd_y - avg_rev_y;
+            float diff_z = avg_fwd_z - avg_rev_z;
+            processed_data[i].magnitude_G = sqrtf(diff_x * diff_x + diff_y * diff_y + diff_z * diff_z);
+
+            Serial.printf("  fwd avg: X=%7.4f  Y=%7.4f  Z=%7.4f  (n=%u)\n", avg_fwd_x, avg_fwd_y, avg_fwd_z, fwd_count);
+            Serial.printf("  rev avg: X=%7.4f  Y=%7.4f  Z=%7.4f  (n=%u)\n", avg_rev_x, avg_rev_y, avg_rev_z, rev_count);
+            Serial.printf("  signal strength: %.4f Gauss", processed_data[i].magnitude_G);
+
+            if (processed_data[i].magnitude_G >= EMAG_MIN_SIGNAL_GAUSS) {
+                Serial.println(" [VALID]");
+                valid_count++;
+
+                // Calculate noise corrected azimuth and elevation angles
+                float azimuth_fwd = atan2f(avg_fwd_y, avg_fwd_x);
+                float azimuth_rev = fmodf(atan2f(avg_rev_y, avg_rev_x) + M_PI, 2 * M_PI);
+                Serial.printf("  fwd azimuth: %.2f rad  rev azimuth: %.2f rad\n", azimuth_fwd, azimuth_rev);
+                processed_data[i].azimuth_angle_rad = (azimuth_fwd + azimuth_rev) / 2.0f;
+
+                float elevation_fwd = atan2f(avg_fwd_z, sqrtf(avg_fwd_x * avg_fwd_x + avg_fwd_y * avg_fwd_y));
+                float elevation_rev = fmodf(atan2f(avg_rev_z, sqrtf(avg_rev_x * avg_rev_x + avg_rev_y * avg_rev_y)) + M_PI, 2 * M_PI);
+                Serial.printf("  fwd elevation: %.2f rad  rev elevation: %.2f rad\n", elevation_fwd, elevation_rev);
+                processed_data[i].elevation_angle_rad = (elevation_fwd + elevation_rev) / 2.0f;
+            } else {
+                Serial.println(" [WEAK - skipped]");
+            }
+        } else {
+            Serial.println("  insufficient fwd/rev samples - skipped");
+        }
+    }
+    return valid_count;
 }
 
-static bool detectStartPulse(float mx, float my, float mz, uint32_t current_time) {
-    float mx_cal = mx - avgX.avg();
-    float my_cal = my - avgY.avg();
-    float mz_cal = mz - avgZ.avg();
-    
-    float field_magnitude = sqrtf(mx_cal * mx_cal + my_cal * my_cal + mz_cal * mz_cal);
-    bool field_high = field_magnitude > FIELD_THRESHOLD_GAUSS;
-    
-    switch (pulse_state) {
-        case PULSE_IDLE:
-            if (field_high) {
-                pulse_state = PULSE_HIGH;
-                pulse_transition_time = current_time;
-                detected_pulse_count = 0;
-            }
-            break;
-            
-        case PULSE_HIGH: {
-            uint32_t elapsed = current_time - pulse_transition_time;
-            
-            if (!field_high) {
-                if (elapsed >= PULSE_ON_MIN_MS && elapsed <= PULSE_ON_MAX_MS) {
-                    pulse_state = PULSE_LOW;
-                    pulse_transition_time = current_time;
-                    detected_pulse_count++;
-                } else {
-                    pulse_state = PULSE_IDLE;
-                    detected_pulse_count = 0;
+static bool populateEmagIndices(CalculatedPosition* calculated_positions, ProcessedEmagData* processed_data, uint8_t valid_emag_count) {
+    uint8_t indices[3] = {0xFF, 0xFF, 0xFF};
+    switch (valid_emag_count) {
+        case 0:
+        case 1:
+            return false;
+        case 2:
+            for (uint8_t i = 0, j = 0; i < EMAG_COUNT && j < 2; i++) {
+                if (processed_data[i].magnitude_G >= EMAG_MIN_SIGNAL_GAUSS) {
+                    indices[j++] = i;
                 }
-            } else if (elapsed > PULSE_ON_MAX_MS) {
-                pulse_state = PULSE_IDLE;
-                detected_pulse_count = 0;
+            }
+            calculated_positions[0].emag_index_0 = indices[0];
+            calculated_positions[0].emag_index_1 = indices[1];
+            return true;
+        case 3:
+            for (uint8_t i = 0, j = 0; i < EMAG_COUNT && j < 3; i++) {
+                if (processed_data[i].magnitude_G >= EMAG_MIN_SIGNAL_GAUSS) {
+                    indices[j++] = i;
+                }
             }
             break;
-        }
-            
-        case PULSE_LOW: {
-            uint32_t elapsed = current_time - pulse_transition_time;
-            
-            if (field_high) {
-                if (elapsed >= PULSE_OFF_MIN_MS && elapsed <= PULSE_OFF_MAX_MS) {
-                    if (detected_pulse_count >= EMAG_START_PULSE_COUNT) {
-                        pulse_state = PULSE_IDLE;
-                        detected_pulse_count = 0;
-                        return true;
-                    } else {
-                        pulse_state = PULSE_HIGH;
-                        pulse_transition_time = current_time;
+        default: {
+            // 4 or more valid — select the 3 strongest by iterative max search
+            for (uint8_t pick = 0; pick < 3; pick++) {
+                float best_mag = -1.0f;
+                for (uint8_t i = 0; i < EMAG_COUNT; i++) {
+                    if (processed_data[i].magnitude_G < EMAG_MIN_SIGNAL_GAUSS) continue;
+                    bool already_picked = false;
+                    for (uint8_t p = 0; p < pick; p++) {
+                        if (indices[p] == i) { already_picked = true; break; }
                     }
-                } else {
-                    pulse_state = PULSE_IDLE;
-                    detected_pulse_count = 0;
+                    if (already_picked) continue;
+                    if (processed_data[i].magnitude_G > best_mag) {
+                        best_mag = processed_data[i].magnitude_G;
+                        indices[pick] = i;
+                    }
                 }
-            } else if (elapsed > PULSE_OFF_MAX_MS) {
-                pulse_state = PULSE_IDLE;
-                detected_pulse_count = 0;
             }
             break;
         }
     }
+
+    // For the case of 3+ valid emags, create the 3 possible combination pairs
+    calculated_positions[0].emag_index_0 = indices[0];
+    calculated_positions[0].emag_index_1 = indices[1];
+    calculated_positions[1].emag_index_0 = indices[0];
+    calculated_positions[1].emag_index_1 = indices[2];
+    calculated_positions[2].emag_index_0 = indices[1];
+    calculated_positions[2].emag_index_1 = indices[2];
+    return true;
+}
+
+static bool solvePositions(CalculatedPosition* calculated_positions, ProcessedEmagData* processed_data) {
+    bool any_solved = false;
+
+    for (uint8_t i = 0; i < 3; i++) {
+        if (calculated_positions[i].emag_index_0 == 0xFF || calculated_positions[i].emag_index_1 == 0xFF) {
+            continue;
+        }
+        uint8_t idx0 = calculated_positions[i].emag_index_0;
+        uint8_t idx1 = calculated_positions[i].emag_index_1;
+
+        float e0x = emag_positions[idx0][0];
+        float e0y = emag_positions[idx0][1];
+        float e1x = emag_positions[idx1][0];
+        float e1y = emag_positions[idx1][1];
+
+        float m0 = processed_data[idx0].magnitude_G;
+        float m1 = processed_data[idx1].magnitude_G;
+        float a0 = processed_data[idx0].azimuth_angle_rad;
+        float a1 = processed_data[idx1].azimuth_angle_rad;
+
+        // Distance ratio from dipole falloff: B ∝ 1/r³  →  d0/d1 = (m1/m0)^(1/3)
+        float ratio = cbrtf(m1 / m0);
+
+        float da = a0 - a1;  // Δα = α0 - α1
+        float P = ratio * cosf(da) - 1.0f;
+        float Q = ratio * sinf(da);
+        float denom = P * P + Q * Q;
+
+        if (denom < 1e-6f) {
+            Serial.printf("  pair[%u]: degenerate geometry (P²+Q²=%.6f), skipped\n", i, denom);
+            continue;
+        }
+
+        float dex = e0x - e1x;
+        float dey = e0y - e1y;
+        float emag_sep_sq = dex * dex + dey * dey;
+        float d1 = sqrtf(emag_sep_sq / denom);
+
+        float A = dex / d1;
+        float B = dey / d1;
+
+        // β1 = direction from robot to emag1 in world frame
+        float beta1 = atan2f(P * B - Q * A, P * A + Q * B);
+
+        // Heading: β1 = α1 + θ  →  θ = β1 - α1
+        float theta = beta1 - a1;
+        // Normalize θ to [-π, π]
+        theta = fmodf(theta + (float)M_PI, 2.0f * (float)M_PI);
+        if (theta < 0.0f) theta += 2.0f * (float)M_PI;
+        theta -= (float)M_PI;
+
+        float rx = e1x - d1 * cosf(beta1);
+        float ry = e1y - d1 * sinf(beta1);
+
+        calculated_positions[i].pos_x_mm = rx;
+        calculated_positions[i].pos_y_mm = ry;
+        calculated_positions[i].ang_rad  = theta;
+        calculated_positions[i].confidence = fminf(m0, m1) * sqrtf(denom);
+        any_solved = true;
+
+        Serial.printf("  pair[%u]: emags(%u,%u) → pos=(%.1f, %.1f) mm  θ=%.2f rad  conf=%.3f\n",
+                      i, idx0, idx1, rx, ry, theta, calculated_positions[i].confidence);
+    }
+
+    return any_solved;
+}
+
+static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robot) {
+    uint32_t calc_start = micros();
+
+    Serial.println("========== EMAG FRAME DATA ==========");
+    Serial.printf("Background field: X=%.4f  Y=%.4f  Z=%.4f Gauss\n",
+                  frame->bg_x, frame->bg_y, frame->bg_z);
     
+    ProcessedEmagData processed_data[EMAG_COUNT];
+    uint8_t valid_emag_count = processEmagReadings(frame, processed_data);
+
+    Serial.printf("Valid electromagnet readings: %u / %u\n", valid_emag_count, EMAG_COUNT);
+    Serial.println("=====================================");
+
+    CalculatedPosition calculated_positions[3];
+    populateEmagIndices(calculated_positions, processed_data, valid_emag_count);
+
+    solvePositions(calculated_positions, processed_data);
+
+    // Report position calculation time, this is bad if longer than frame length
+    uint32_t calc_end = micros();
+    Serial.printf("Calc time: %lu us\n", calc_end - calc_start);
     return false;
+}
+
+bool PositionEstimator_StartSync(uint16_t timeout_ms) {
+    if (current_state == STATE_START_PULSES) return false;
+    pulse_state = PULSE_IDLE;
+    detected_pulse_count = 0;
+    sync_deadline_ms = millis() + timeout_ms;
+    current_state = STATE_START_PULSES;
+    return true;
+}
+
+QueueHandle_t PositionEstimator_GetSyncResultQueue(void) {
+    return sync_result_queue;
 }
 
 void PositionEstimator_SensorTask(void* pvParameters) {
@@ -200,10 +340,7 @@ void PositionEstimator_SensorTask(void* pvParameters) {
         return;
     }
 
-    current_state = STATE_WAITING_PAUSE;
     uint32_t last_sample_time = micros();
-    uint32_t pause_quiet_start = 0;
-    bool pause_was_quiet = false;
 
     while (1) {
         uint32_t current_time = millis();
@@ -233,75 +370,83 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                 float mz_cal = mz - avgZ.avg();
                 float field_magnitude = sqrtf(mx_cal * mx_cal + my_cal * my_cal + mz_cal * mz_cal);
 
-                Serial.printf("%lu\t%.3f\t%.3f\t%.3f\t%.3f\n", current_micros, mx, my, mz, field_magnitude);
+                // Serial.printf("%lu\t%.3f\t%.3f\t%.3f\t%.3f\n", current_micros, mx, my, mz, field_magnitude);
 
-                // switch (current_state) {
+                switch (current_state) {
+                    case STATE_START_PULSES: {
+                        if (field_magnitude > FIELD_THRESHOLD_GAUSS) {
+                            Serial.println("Start pulse detected");
+                            pulse_detected_time_ms = current_time;
+                            state_start_time = current_time;
+                            memset(&current_frame, 0, sizeof(current_frame));
+                            synced = true;
+                            current_state = STATE_MEASURING;
+                            Serial.printf("Sync pulse detected at %lu ms\n", pulse_detected_time_ms);
+                            PosSyncResult result;
+                            result.detected = true;
+                            xQueueOverwrite(sync_result_queue, &result);
+                        } else if ((int32_t)(current_time - sync_deadline_ms) >= 0) {
+                            Serial.println("Start pulse NOT detected");
+                            current_state = STATE_SYNC_LOST;
+                            Serial.println("Sync timeout - no pulse detected");
+                            PosSyncResult result;
+                            result.detected = false;
+                            xQueueOverwrite(sync_result_queue, &result);
+                        }
+                        break;
+                    }
+                    case STATE_MEASURING: {
+                        const uint32_t slot_ms = EMAG_FWD_ON_TIME_MS + EMAG_GAP_TIME_MS
+                                               + EMAG_REV_ON_TIME_MS + EMAG_GAP_TIME_MS;
+                        uint32_t elapsed_ms = current_time - state_start_time;
+                        uint8_t  emag_index = (uint8_t)(elapsed_ms / slot_ms);
 
-                //     case STATE_WAITING_PAUSE: {
-                //         if (field_magnitude < FIELD_THRESHOLD_GAUSS) {
-                //             if (!pause_was_quiet) {
-                //                 pause_was_quiet = true;
-                //                 pause_quiet_start = current_time;
-                //             } else if ((current_time - pause_quiet_start) >= EMAG_PAUSE_TIME_MS) {
-                //                 pulse_state = PULSE_IDLE;
-                //                 detected_pulse_count = 0;
-                //                 current_state = STATE_START_PULSES;
-                //             }
-                //         } else {
-                //             pause_was_quiet = false;
-                //         }
-                //         break;
-                //     }
+                        if (emag_index >= EMAG_COUNT) {
+                            current_frame.bg_x = avgX.avg();
+                            current_frame.bg_y = avgY.avg();
+                            current_frame.bg_z = avgZ.avg();
+                            xQueueOverwrite(emag_frame_queue, &current_frame);
+                            current_state = STATE_IDLE;
+                            Serial.println("Emag frame complete, posted to queue");
+                            break;
+                        }
 
-                //     case STATE_START_PULSES: {
-                //         if (detectStartPulse(mx, my, mz, current_time)) {
-                //             for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-                //                 emag_readings[i].count = 0;
-                //             }
-                //             state_start_time = current_time;
-                //             current_state = STATE_MEASURING;
-                //         }
-                //         break;
-                //     }
+                        uint32_t offset = elapsed_ms % slot_ms;
 
-                //     case STATE_MEASURING: {
-                //         uint32_t elapsed_ms = current_time - state_start_time;
-                //         const uint32_t slot_duration = EMAG_ON_TIME_MS + EMAG_GAP_TIME_MS;
-                //         uint8_t emag_index = (uint8_t)(elapsed_ms / slot_duration);
-                //         bool within_on_window = (elapsed_ms % slot_duration) < EMAG_ON_TIME_MS;
+                        // Forward active window (trim leading and trailing edges)
+                        bool in_fwd = (offset >= EMAG_TRIM_MS) &&
+                                      (offset <  EMAG_FWD_ON_TIME_MS - EMAG_TRIM_MS);
 
-                //         if (emag_index < EMAG_COUNT && within_on_window) {
-                //             EmagReading* r = &emag_readings[emag_index];
-                //             if (r->count < MAX_SAMPLES_PER_EMAG) {
-                //                 r->x[r->count] = mx;
-                //                 r->y[r->count] = my;
-                //                 r->z[r->count] = mz;
-                //                 r->count++;
-                //             }
-                //         }
+                        // Reverse active window
+                        const uint32_t rev_start = EMAG_FWD_ON_TIME_MS + EMAG_GAP_TIME_MS;
+                        bool in_rev = (offset >= rev_start + EMAG_TRIM_MS) &&
+                                      (offset <  rev_start + EMAG_REV_ON_TIME_MS - EMAG_TRIM_MS);
 
-                //         if (emag_index >= EMAG_COUNT) {
-                //             EmagFrameData frame;
-                //             memcpy(frame.readings, emag_readings, sizeof(emag_readings));
-                //             frame.bg_x = avgX.avg();
-                //             frame.bg_y = avgY.avg();
-                //             frame.bg_z = avgZ.avg();
-                //             xQueueOverwrite(emag_frame_queue, &frame);
-
-                //             for (uint8_t i = 0; i < EMAG_COUNT; i++) {
-                //                 emag_readings[i].count = 0;
-                //             }
-                //             pause_was_quiet = false;
-                //             current_state = STATE_WAITING_PAUSE;
-                //         }
-                //         break;
-                //     }
-
-                //     case STATE_IDLE:
-                //     default:
-                //         current_state = STATE_WAITING_PAUSE;
-                //         break;
-                // }
+                        if (in_fwd || in_rev) {
+                            EmagReading* r = &current_frame.readings[emag_index];
+                            if (r->count < MAX_SAMPLES_PER_EMAG) {
+                                r->x[r->count] = mx;
+                                r->y[r->count] = my;
+                                r->z[r->count] = mz;
+                                r->is_forward[r->count] = in_fwd;
+                                r->count++;
+                            }
+                        }
+                        break;
+                    }
+                    case STATE_IDLE: {
+                        if (synced && (int32_t)(current_time - (state_start_time + EMAG_FRAME_LEN_MS)) >= 0) {
+                            state_start_time += EMAG_FRAME_LEN_MS;
+                            memset(&current_frame, 0, sizeof(current_frame));
+                            current_state = STATE_MEASURING;
+                            Serial.printf("Starting new emag frame at %lu ms\n", current_time);
+                        }
+                        break;
+                    }
+                    case STATE_SYNC_LOST: {
+                        break;
+                    }
+                }
             }
         }
 

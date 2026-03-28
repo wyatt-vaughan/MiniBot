@@ -18,7 +18,7 @@ from coordinator import (
     BOARD_DISPLAY_OFFSET_Y, BOARD_DISPLAY_SQUARE_SIZE,
     CommandType, Position, Piece, PieceCommand,
     PieceCommandSequence, ExecutionPlan, SimulatorState,
-    PathPlanner, SequentialPathPlanner, AI_Planner, AStarPlanner, AStarOptimized, VisualSimulationPlanner
+    PathPlanner, SequentialPathPlanner, AI_Planner, AStarPlanner, AStarOptimized, VisualSimulationPlanner, ForceSimulationPlanner
 )
 from coordinator.utils import board_coords_to_world
 
@@ -356,6 +356,7 @@ class ChessRobotUI:
             AStarPlanner(grid_resolution=10),
             AStarOptimized(grid_resolution=10),
             VisualSimulationPlanner(time_step=0.2),
+            ForceSimulationPlanner(),
         ]
         self.buttons = []  # Will be populated by draw_ui_buttons
         

@@ -4,30 +4,32 @@
 #include <Arduino.h>
 
 // Enable Joystick Mode (disable GUI mode when enabled)
-#define ENABLE_JOYSTICK_MODE 1
+#define ENABLE_JOYSTICK_MODE 0
+
+// Random GPIO
+#define STATUS_LED_WHITE_PIN 5
+#define STATUS_LED_RED_PIN 4
 
 // Electromagnet Configuration
-#define NUM_ELECTROMAGNETS 6
+#define NUM_ELECTROMAGNETS 2
 
-// Cycle frequency (Hz) - Target frequency for the pattern repetition
-#define EMAG_CYCLE_FREQ_HZ 10.0
-
-// GPIO pins for electromagnets
-const uint8_t EMAG_PINS[NUM_ELECTROMAGNETS] = {
-  32,
-  33,
-  25,
-  26,
-  27,
-  14,
+// GPIO pins for electromagnets (A=forward drive, B=reverse drive)
+// Forward: [A=HIGH, B=LOW]  Reverse: [A=LOW, B=HIGH]  Off: [A=LOW, B=LOW]
+const uint8_t EMAG_PINS_A[NUM_ELECTROMAGNETS] = {
+  6,
+  8,
+};
+const uint8_t EMAG_PINS_B[NUM_ELECTROMAGNETS] = {
+  7,
+  9,
 };
 
 // Timing parameters (milliseconds)
-#define EMAG_PULSE_COUNT 3
-#define EMAG_PULSE_ON_MS 3
-#define EMAG_PULSE_OFF_MS 3
-#define EMAG_INDIVIDUAL_ON_MS 5
-#define EMAG_DEADTIME_MS 10
+#define EMAG_FRAME_LEN_MS            100    // Total frame length
+#define EMAG_COUNT                   2      // Number of electromagnets in pattern
+#define EMAG_FWD_ON_TIME_MS          6      // How long forward power is applied
+#define EMAG_REV_ON_TIME_MS          6      // How long reverse power is applied
+#define EMAG_GAP_TIME_MS             1      // Time between changing electromagnet states
 
 // ============= Joystick Configuration =============
 #if ENABLE_JOYSTICK_MODE

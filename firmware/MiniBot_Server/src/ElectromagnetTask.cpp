@@ -1,109 +1,53 @@
 #include "ElectromagnetTask.h"
+#include <esp_timer.h>
 
 // Task handle
 TaskHandle_t emagTaskHandle = NULL;
 
-// Control flag
+// Control flags
 volatile bool emagEnabled = false;
+volatile bool syncPulseRequested = false;
 
 // Initialize electromagnets
 void initElectromagnets() {
-  // Calculate minimum cycle time based on timing parameters
-  uint32_t phase1_time_ms = EMAG_PULSE_COUNT * (EMAG_PULSE_ON_MS + EMAG_PULSE_OFF_MS);
-  uint32_t phase2_time_ms = NUM_ELECTROMAGNETS * EMAG_INDIVIDUAL_ON_MS;
-  uint32_t phase3_time_ms = EMAG_DEADTIME_MS;
-  uint32_t min_cycle_time_ms = phase1_time_ms + phase2_time_ms + phase3_time_ms;
-  
-  // Calculate maximum achievable frequency
-  float max_freq_hz = 1000.0 / min_cycle_time_ms;
-  
-  // Validate that requested frequency is achievable
-  if (EMAG_CYCLE_FREQ_HZ > max_freq_hz) {
-    Serial.println("====================================");
-    Serial.println("WARNING: ELECTROMAGNET FREQUENCY TOO HIGH!");
-    Serial.printf("Requested: %.2f Hz, Maximum: %.2f Hz\n", EMAG_CYCLE_FREQ_HZ, max_freq_hz);
-    Serial.println("Electromagnet task will be DISABLED.");
-    Serial.println("====================================");
-    
-    // Disable electromagnet cycling due to invalid configuration
-    emagEnabled = false;
+  if (EMAG_COUNT * (EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS + (2 * EMAG_GAP_TIME_MS)) > EMAG_FRAME_LEN_MS) {
+    Serial.println("WARNING: Electromagnet on-time exceeds frame length! Adjust timing parameters.");
   }
   
-  // Configure all electromagnet pins as outputs
+  // Configure all electromagnet pins as outputs, start disabled
   for (int i = 0; i < NUM_ELECTROMAGNETS; i++) {
-    pinMode(EMAG_PINS[i], OUTPUT);
-    digitalWrite(EMAG_PINS[i], LOW);  // Start with all off
+    pinMode(EMAG_PINS_A[i], OUTPUT);
+    pinMode(EMAG_PINS_B[i], OUTPUT);
+    digitalWrite(EMAG_PINS_A[i], LOW);
+    digitalWrite(EMAG_PINS_B[i], LOW);
   }
   
   Serial.println("Electromagnets initialized");
 }
 
-// Set all electromagnets to a state
-void setAllElectromagnets(bool state) {
-  for (int i = 0; i < NUM_ELECTROMAGNETS; i++) {
-    digitalWrite(EMAG_PINS[i], state ? HIGH : LOW);
+bool setElectromagnet(uint8_t emag_i, bool enabled, bool forward) {
+  if (emag_i >= NUM_ELECTROMAGNETS) {
+    Serial.printf("Invalid electromagnet index: %d\n", emag_i);
+    return false;
   }
+  
+  if (!enabled) {
+    digitalWrite(EMAG_PINS_A[emag_i], LOW);
+    digitalWrite(EMAG_PINS_B[emag_i], LOW);
+  } else if (forward) {
+    digitalWrite(EMAG_PINS_A[emag_i], HIGH);
+    digitalWrite(EMAG_PINS_B[emag_i], LOW);
+  } else {
+    digitalWrite(EMAG_PINS_A[emag_i], LOW);
+    digitalWrite(EMAG_PINS_B[emag_i], HIGH);
+  }
+  return true;
 }
 
-// FreeRTOS electromagnet task
-void electromagnetTask(void *parameter) {
-  Serial.println("Electromagnet Task started");
-  
-  // Calculate actual cycle time and additional delay needed to match frequency
-  uint32_t phase1_time_ms = EMAG_PULSE_COUNT * (EMAG_PULSE_ON_MS + EMAG_PULSE_OFF_MS);
-  uint32_t phase2_time_ms = NUM_ELECTROMAGNETS * EMAG_INDIVIDUAL_ON_MS;
-  uint32_t phase3_time_ms = EMAG_DEADTIME_MS;
-  uint32_t pattern_time_ms = phase1_time_ms + phase2_time_ms + phase3_time_ms;
-  
-  // Calculate target cycle time from frequency
-  uint32_t target_cycle_ms = (uint32_t)(1000.0 / EMAG_CYCLE_FREQ_HZ);
-  
-  // Additional delay needed to achieve target frequency
-  uint32_t additional_delay_ms = 0;
-  if (target_cycle_ms > pattern_time_ms) {
-    additional_delay_ms = target_cycle_ms - pattern_time_ms;
-  }
-  
-  Serial.printf("Pattern execution time: %d ms\n", pattern_time_ms);
-  Serial.printf("Target cycle time: %d ms (%.2f Hz)\n", target_cycle_ms, EMAG_CYCLE_FREQ_HZ);
-  Serial.printf("Additional delay per cycle: %d ms\n", additional_delay_ms);
-  
-  while (1) {
-    // Check if electromagnet cycling is enabled
-    if (emagEnabled) {
-      uint32_t cycleStart = millis();
-      
-      // Phase 1: Pulse all electromagnets 3 times
-      for (int pulse = 0; pulse < EMAG_PULSE_COUNT; pulse++) {
-        setAllElectromagnets(true);
-        vTaskDelay(pdMS_TO_TICKS(EMAG_PULSE_ON_MS));
-        
-        setAllElectromagnets(false);
-        vTaskDelay(pdMS_TO_TICKS(EMAG_PULSE_OFF_MS));
-      }
-      
-      // Phase 2: Turn on each electromagnet individually in order
-      for (int i = 0; i < NUM_ELECTROMAGNETS; i++) {
-        uint8_t pin = EMAG_PINS[i];
-        digitalWrite(pin, HIGH);
-        vTaskDelay(pdMS_TO_TICKS(EMAG_INDIVIDUAL_ON_MS));
-        digitalWrite(pin, LOW);
-      }
-      
-      // Phase 3: Deadtime - all off
-      setAllElectromagnets(false);
-      vTaskDelay(pdMS_TO_TICKS(EMAG_DEADTIME_MS));
-      
-      // Add additional delay to match target frequency
-      if (additional_delay_ms > 0) {
-        vTaskDelay(pdMS_TO_TICKS(additional_delay_ms));
-      }
-      
-    } else {
-      // If disabled, ensure all are off and wait
-      setAllElectromagnets(false);
-      vTaskDelay(pdMS_TO_TICKS(100));
-    }
+// Set all electromagnets: disabled=[0,0], forward=[1,0], reverse=[0,1]
+void setAllElectromagnets(bool enabled, bool forward) {
+  for (int i = 0; i < NUM_ELECTROMAGNETS; i++) {
+    setElectromagnet(i, enabled, forward);
   }
 }
 
@@ -111,13 +55,86 @@ void electromagnetTask(void *parameter) {
 void setElectromagnetEnabled(bool enabled) {
   emagEnabled = enabled;
   if (!enabled) {
-    // Immediately turn off all electromagnets
     setAllElectromagnets(false);
   }
-  Serial.printf("Electromagnet cycling %s\n", enabled ? "ENABLED" : "DISABLED");
+  Serial.printf("Electromagnet cycling %s\n",
+                enabled ? "ENABLED" : "DISABLED");
 }
 
 // Get current state
 bool getElectromagnetEnabled() {
   return emagEnabled;
 }
+
+// Request a one-shot 3ms sync pulse at the start of the next emag frame
+void triggerSyncPulse() {
+  syncPulseRequested = true;
+  Serial.println("Sync pulse requested");
+}
+
+// Wait until an absolute esp_timer_get_time() target (µs).
+// Uses vTaskDelay to yield when more than 2ms remain, then busy-waits the tail.
+static void waitUntilUs(int64_t targetUs) {
+  int64_t sleepMs = (targetUs - esp_timer_get_time()) / 1000LL - 2;
+  if (sleepMs > 0) {
+    vTaskDelay(pdMS_TO_TICKS((uint32_t)sleepMs));
+  }
+  while (esp_timer_get_time() < targetUs) {}
+}
+
+// FreeRTOS electromagnet task
+void electromagnetTask(void *parameter) {
+  Serial.println("Electromagnet Task started");
+
+  const int64_t frameLenUs = (int64_t)EMAG_FRAME_LEN_MS * 1000LL;
+  int64_t nextFrameStartUs = esp_timer_get_time();
+
+  while (1) {
+    nextFrameStartUs += frameLenUs;
+    waitUntilUs(nextFrameStartUs);
+
+    // --- Frame start ---
+
+    // Sync pulse: fire all emags for 3ms to sync frame start
+    if (syncPulseRequested) {
+      syncPulseRequested = false;
+      setAllElectromagnets(true, true);  // forward pulse for sync
+      waitUntilUs(nextFrameStartUs + 3000LL);
+      setAllElectromagnets(false);
+      Serial.println("Sync pulse fired (3ms)");
+    }
+    else if (emagEnabled) {
+      const int64_t fwdOnUs = (int64_t)EMAG_FWD_ON_TIME_MS * 1000LL;
+      const int64_t revOnUs = (int64_t)EMAG_REV_ON_TIME_MS * 1000LL;
+      const int64_t gapUs   = (int64_t)EMAG_GAP_TIME_MS    * 1000LL;
+
+      int64_t interFrameTimeUs = nextFrameStartUs;
+
+      for (int i = 0; i < EMAG_COUNT && emagEnabled; i++) {
+        // Forward ON
+        setElectromagnet(i, true, true);
+        interFrameTimeUs += fwdOnUs;
+        waitUntilUs(interFrameTimeUs);
+
+        // Wait
+        setElectromagnet(i, false);
+        interFrameTimeUs += gapUs;
+        waitUntilUs(interFrameTimeUs);
+
+        // Reverse ON
+        setElectromagnet(i, true, false);
+        interFrameTimeUs += revOnUs;
+        waitUntilUs(interFrameTimeUs);
+
+        // Wait
+        setElectromagnet(i, false);
+        interFrameTimeUs += gapUs;
+        waitUntilUs(interFrameTimeUs);
+      }
+    }
+
+    // Ensure all emags are off at the end of the frame
+    setAllElectromagnets(false);
+  }
+}
+
