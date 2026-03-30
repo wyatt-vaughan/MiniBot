@@ -32,9 +32,13 @@ public:
 
     bool begin(int sda_pin = -1, int scl_pin = -1, uint32_t i2c_freq = 400000);
     bool readMeasurement(uint32_t timeout_ms = 20);
+    bool isMeasurementReady();
     bool enableContinuousMode();
     bool disableContinuousMode();
     bool runSelfTest(uint32_t timeout_ms = 100);
+    bool setReset();
+    void checkDeviceStatus();
+    bool recoverDevice();
 
     int32_t signedX() const;
     int32_t signedY() const;
@@ -51,6 +55,7 @@ private:
     TwoWire &_wire;
     bool _continuous_mode;
     uint32_t rawX = 0, rawY = 0, rawZ = 0;
+    uint32_t _lastX = UINT32_MAX, _lastY = UINT32_MAX, _lastZ = UINT32_MAX;
     int8_t rawTemp = 0;
 
     bool waitForMeasurementDone(uint32_t timeout_ms);

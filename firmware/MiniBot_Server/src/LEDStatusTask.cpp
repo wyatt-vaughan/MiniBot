@@ -1,6 +1,12 @@
 #include "LEDStatusTask.h"
 #include "config.h"
 
+#if ENABLE_JOYSTICK_MODE
+  #define IDLE_LED_COLOR LED_COLOR_RED
+#else
+  #define IDLE_LED_COLOR LED_COLOR_WHITE
+#endif
+
 TaskHandle_t ledStatusTaskHandle = NULL;
 QueueHandle_t ledEventQueue = NULL;
 
@@ -40,10 +46,10 @@ void ledPostEvent(LedEventType type, LedColor color,
 void ledStatusTask(void *parameter) {
   Serial.println("LED Status Task started");
 
-  // Default idle heartbeat: 100ms white on, 900ms off, indefinite
+  // Default idle heartbeat: 100ms on, 900ms off, indefinite
   LedEvent current = {
     .type    = LED_EVENT_IDLE,
-    .color   = LED_COLOR_WHITE,
+    .color   = IDLE_LED_COLOR,
     .on_ms   = 100,
     .off_ms  = 900,
     .repeats = -1,
@@ -78,7 +84,7 @@ void ledStatusTask(void *parameter) {
         // Finished: return to idle
         current = {
           .type    = LED_EVENT_IDLE,
-          .color   = LED_COLOR_WHITE,
+          .color   = IDLE_LED_COLOR,
           .on_ms   = 100,
           .off_ms  = 900,
           .repeats = -1,

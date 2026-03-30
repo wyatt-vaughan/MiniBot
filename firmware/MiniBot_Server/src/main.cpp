@@ -80,7 +80,7 @@ void setup() {
     NULL,              // Parameter
     2,                 // Priority
     &guiTaskHandle,    // Task handle
-    1                  // Core (0 or 1)
+    0                  // Core (0 or 1)
   );
 #endif
   
@@ -101,7 +101,7 @@ void setup() {
     NULL,              // Parameter
     1,                 // Priority (lower than comm/gui)
     &emagTaskHandle,   // Task handle
-    0                  // Core (0 or 1)
+    1                  // Core (0 or 1)
   );
 
   xTaskCreatePinnedToCore(
@@ -111,7 +111,7 @@ void setup() {
     NULL,                 // Parameter
     1,                    // Priority
     &ledStatusTaskHandle, // Task handle
-    1                     // Core (0 or 1)
+    0                     // Core (0 or 1)
   );
   
   // xTaskCreatePinnedToCore(

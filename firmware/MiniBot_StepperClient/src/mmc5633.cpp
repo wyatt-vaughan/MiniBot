@@ -7,18 +7,29 @@ bool MMC5633NJL::begin(int sda_pin, int scl_pin, uint32_t i2c_freq) {
     if (sda_pin >= 0 && scl_pin >= 0) _wire.begin(sda_pin, scl_pin, i2c_freq);
     else _wire.begin();
 
-    delay(10);
+    delay(5);
 
+    // Reset chip and check product ID
+    if (!writeRegister(REG_CTRL1, 0x80)) return false;
+    delay(20);
     uint8_t pid = 0;
     if (!readRegister(REG_PRODUCT_ID, &pid)) return false;
     if (pid != 0x10) return false;
 
-    if (!writeRegister(REG_CTRL1, 0x03)) return false;
-    if (!writeRegister(REG_ODR, 0xFF)) return false;
-    if (!writeRegister(REG_CTRL0, 0xA0)) return false;
+    // if (!writeRegister(REG_CTRL1, 0x03)) return false;
+    // if (!disableContinuousMode()) return false;
+    // if (!runSelfTest()) return false;
 
-    disableContinuousMode();
+    return true;
+}
 
+bool MMC5633NJL::setReset() {
+    // manual set/reset, will take ~4ms to complete
+    vTaskDelay(pdMS_TO_TICKS(1));
+    if (!writeRegister(REG_CTRL0, 0x08)) return false;
+    vTaskDelay(pdMS_TO_TICKS(1));
+    if (!writeRegister(REG_CTRL0, 0x10)) return false;
+    vTaskDelay(pdMS_TO_TICKS(1));
     return true;
 }
 
@@ -28,6 +39,8 @@ bool MMC5633NJL::readMeasurement(uint32_t timeout_ms) {
         if (!readRegisters(REG_XOUT0, buf, 9)) return false;
         unpackRawXYZFromBuffer(buf, 9);
         rawTemp = buf[8];
+        if (rawX == _lastX && rawY == _lastY && rawZ == _lastZ) return false;
+        _lastX = rawX; _lastY = rawY; _lastZ = rawZ;
         return true;
     } else {
         // On-demand mode: trigger measurement and wait
@@ -45,9 +58,21 @@ bool MMC5633NJL::readMeasurement(uint32_t timeout_ms) {
     }
 }
 
+bool MMC5633NJL::isMeasurementReady() {
+    uint8_t status = 0;
+    if (!readRegister(REG_STATUS1, &status)) return false;
+    return (status & STAT1_MEAS_M_DONE) != 0;
+}
+
 bool MMC5633NJL::enableContinuousMode() {
     // Enable continuous measurement mode at 1000hz sampling
+    if (!writeRegister(REG_CTRL1, 0x03)) return false;
+    if (!writeRegister(REG_ODR,   0xFF)) return false;
+    if (!writeRegister(REG_CTRL0, 0x80)) return false;
+    delay(2);
     if (!writeRegister(REG_CTRL2, 0x90)) return false;
+    if (!writeRegister(REG_CTRL2, 0x90)) return false;
+    delay(2);
 
     _continuous_mode = true;
     return true;
@@ -111,6 +136,53 @@ float MMC5633NJL::getAzimuthRadians() const {
     float fx = (float)signedX();
     float fy = (float)signedY();
     return atan2f(fy, fx);
+}
+
+void MMC5633NJL::checkDeviceStatus() {
+    uint8_t status1 = 0;
+    bool ok_status1 = readRegister(REG_STATUS1, &status1);
+
+    if (ok_status1) {
+        Serial.printf("[MMC5633 STATUS] 0x%02X\n", status1);
+    }
+    else {
+        Serial.println("[MMC5633 STATUS] ERROR: failed to read status register");
+    }
+}
+
+bool MMC5633NJL::recoverDevice() {
+    Serial.println("[MMC5633] Attempting device recovery...");
+
+    // Full reinit sequence
+    uint8_t pid = 0;
+    if (!readRegister(REG_PRODUCT_ID, &pid) || pid != 0x10) {
+        Serial.println("[MMC5633] ERROR: cannot reach device during recovery");
+        return false;
+    }
+
+    // Soft reset via CTRL1 bit 7
+    if (!writeRegister(REG_CTRL1, 0x80)) {
+        Serial.println("[MMC5633] ERROR: soft reset write failed");
+        return false;
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    if (!writeRegister(REG_CTRL1, 0x03)) return false;
+    if (!writeRegister(REG_ODR,   0xFF)) return false;
+    if (!writeRegister(REG_CTRL0, 0x00)) return false;
+
+    if (_continuous_mode) {
+        if (!enableContinuousMode()) {
+            Serial.println("[MMC5633] ERROR: failed to re-enable continuous mode after recovery");
+            return false;
+        }
+        Serial.println("[MMC5633] Recovery successful — continuous mode re-enabled");
+    } else {
+        Serial.println("[MMC5633] Recovery successful — on-demand mode restored");
+    }
+
+    _lastX = UINT32_MAX; _lastY = UINT32_MAX; _lastZ = UINT32_MAX;
+    return true;
 }
 
 bool MMC5633NJL::waitForMeasurementDone(uint32_t timeout_ms) {

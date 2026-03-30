@@ -47,7 +47,7 @@ static bool create_tasks(void) {
         "EspNowCommunicator",
         2048,
         (void*)&robot,
-        3,
+        2,
         &communicator_task_handle,
         0
     );
@@ -64,7 +64,7 @@ static bool create_tasks(void) {
         (void*)&robot,
         3,
         &position_estimator_sensor_task_handle,
-        1
+        0
     );
     if (task_created != pdPASS) {
         Serial.println("ERROR: Failed to create Position Estimator Sensor task");
@@ -79,7 +79,7 @@ static bool create_tasks(void) {
         (void*)&robot,
         2,
         &position_estimator_calc_task_handle,
-        1
+        0
     );
     if (task_created != pdPASS) {
         Serial.println("ERROR: Failed to create Position Estimator Calc task");

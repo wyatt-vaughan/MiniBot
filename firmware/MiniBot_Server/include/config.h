@@ -27,8 +27,8 @@ const uint8_t EMAG_PINS_B[NUM_ELECTROMAGNETS] = {
 // Timing parameters (milliseconds)
 #define EMAG_FRAME_LEN_MS            100    // Total frame length
 #define EMAG_COUNT                   2      // Number of electromagnets in pattern
-#define EMAG_FWD_ON_TIME_MS          6      // How long forward power is applied
-#define EMAG_REV_ON_TIME_MS          6      // How long reverse power is applied
+#define EMAG_FWD_ON_TIME_MS          8      // How long forward power is applied
+#define EMAG_REV_ON_TIME_MS          8      // How long reverse power is applied
 #define EMAG_GAP_TIME_MS             1      // Time between changing electromagnet states
 
 // ============= Joystick Configuration =============

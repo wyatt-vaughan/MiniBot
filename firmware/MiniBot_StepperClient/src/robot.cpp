@@ -121,6 +121,7 @@ bool Robot::initialize() {
     true_x = 0.0f;
     true_y = 0.0f;
     true_theta = 0.0f;
+    true_pose_mutex = xSemaphoreCreateMutex();
     
     battery_voltage = 0.0f;
     system_status = 0;
@@ -136,9 +137,58 @@ void Robot::updateTruePosition() {
 }
 
 void Robot::setTruePose(float x, float y, float theta) {
-    true_x = x;
-    true_y = y;
-    true_theta = theta;
+    uint32_t now_us = micros();
+
+    xSemaphoreTake(true_pose_mutex, portMAX_DELAY);
+
+    if (!true_pose_initialized) {
+        true_x = x;
+        true_y = y;
+        true_theta = theta;
+        true_pose_initialized = true;
+        true_pose_last_update_us = now_us;
+        xSemaphoreGive(true_pose_mutex);
+        return;
+    }
+
+    float dt_s = (float)(now_us - true_pose_last_update_us) * 1e-6f;
+    true_pose_last_update_us = now_us;
+
+    // Compute alpha from cutoff frequency: alpha = 1 - exp(-2*pi*f_c*dt)
+    const float alpha = 1.0f - expf(-2.0f * M_PI * TRUE_POSE_LPF_CUTOFF_HZ * dt_s);
+    true_x = alpha * x + (1.0f - alpha) * true_x;
+    true_y = alpha * y + (1.0f - alpha) * true_y;
+
+    // For theta, filter on the shortest angular delta to handle wrap-around
+    float delta = theta - true_theta;
+    while (delta >  M_PI) delta -= 2.0f * M_PI;
+    while (delta < -M_PI) delta += 2.0f * M_PI;
+    true_theta += alpha * delta;
+    while (true_theta >  M_PI) true_theta -= 2.0f * M_PI;
+    while (true_theta < -M_PI) true_theta += 2.0f * M_PI;
+
+    xSemaphoreGive(true_pose_mutex);
+}
+
+bool Robot::getTruePose(float* x, float* y, float* orientation) {
+    xSemaphoreTake(true_pose_mutex, portMAX_DELAY);
+
+    if (!true_pose_initialized) {
+        xSemaphoreGive(true_pose_mutex);
+        return false;
+    }
+
+    uint32_t age_ms = (micros() - true_pose_last_update_us) / 1000;
+    if (age_ms > TRUE_POSE_STALE_TIMEOUT_MS) {
+        xSemaphoreGive(true_pose_mutex);
+        return false;
+    }
+
+    if (x != NULL) *x = true_x;
+    if (y != NULL) *y = true_y;
+    if (orientation != NULL) *orientation = true_theta;
+    xSemaphoreGive(true_pose_mutex);
+    return true;
 }
 
 void Robot::updatePositionFromEstimate() {

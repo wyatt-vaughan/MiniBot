@@ -117,21 +117,21 @@
 // Electromagnet frame timing setup
 #define EMAG_FRAME_LEN_MS            100    // Total frame length
 #define EMAG_COUNT                   2      // Number of electromagnets in platform
-#define EMAG_FWD_ON_TIME_MS          6      // How long forward power is applied
-#define EMAG_REV_ON_TIME_MS          6      // How long reverse power is applied
+#define EMAG_FWD_ON_TIME_MS          8      // How long forward power is applied
+#define EMAG_REV_ON_TIME_MS          8      // How long reverse power is applied
 #define EMAG_GAP_TIME_MS             1      // Time between changing electromagnet states
-#define EMAG_TRIM_MS                 1      // Samples closer than this to state changes are ignored
+#define EMAG_TRIM_MS                 2      // Samples closer than this to state changes are ignored
 
 // Sampling
-#define EMAG_SAMPLE_PERIOD_US        1000   // 1 kHz sampling period (µs)
-#define MAX_SAMPLES_PER_EMAG         ((EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS) * 1000 / EMAG_SAMPLE_PERIOD_US)
+#define EMAG_MIN_SAMPLE_PERIOD_US    900   // 1 kHz sampling period, set faster to avoid missed readings (µs)
+#define MAX_SAMPLES_PER_EMAG         ((EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS) * 1000 / EMAG_MIN_SAMPLE_PERIOD_US)
 
 // Detection thresholds
 #define FIELD_THRESHOLD_GAUSS        0.5f   // Minimum field magnitude to detect emag active
-#define EMAG_MIN_SIGNAL_GAUSS        0.3f   // Minimum fwd-rev differential magnitude to consider an emag reading valid
-#define PULSE_ON_MIN_MS              2      // Start pulse on-time valid range min
-#define PULSE_ON_MAX_MS              4      // Start pulse on-time valid range max
-#define PULSE_OFF_MIN_MS             2      // Start pulse off-time valid range min
-#define PULSE_OFF_MAX_MS             4      // Start pulse off-time valid range max
+
+// Other stuff :)
+#define TRUE_POSE_LPF_CUTOFF_HZ      1.0f
+#define TRUE_POSE_STALE_TIMEOUT_MS   1000   // Max age of true pose before it is considered stale
+#define EMAG_MIN_SIGNAL_GAUSS        0.5f   // Minimum fwd-rev differential magnitude to consider an emag reading valid
 
 #endif // __CONFIG_H__

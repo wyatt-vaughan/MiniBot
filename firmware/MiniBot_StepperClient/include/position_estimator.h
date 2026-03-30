@@ -11,6 +11,7 @@ struct EmagReading {
     float y[MAX_SAMPLES_PER_EMAG];
     float z[MAX_SAMPLES_PER_EMAG];
     bool is_forward[MAX_SAMPLES_PER_EMAG];
+    int64_t timestamp_us[MAX_SAMPLES_PER_EMAG];
     uint16_t count;
 };
 
@@ -44,11 +45,6 @@ enum PositionEstState {
     STATE_SYNC_LOST
 };
 
-enum PulseDetectState {
-    PULSE_IDLE,
-    PULSE_HIGH,
-    PULSE_LOW
-};
 
 /**
  * Position Estimator — Sensor Task

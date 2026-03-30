@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <functional>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 enum class MotionType {
     NONE,
@@ -128,6 +130,9 @@ private:
     float true_x;
     float true_y;
     float true_theta;
+    bool true_pose_initialized = false;
+    uint32_t true_pose_last_update_us = 0;
+    SemaphoreHandle_t true_pose_mutex = NULL;
     
     float battery_voltage;
     float low_battery_v_threshold = BATTERY_CRITICAL_VOLTAGE;
@@ -176,6 +181,18 @@ public:
      * @param theta Orientation in radians
      */
     void setTruePose(float x, float y, float theta);
+
+    /**
+     * Get current robot sensed position
+     * @param x Pointer to store X position
+     * @param y Pointer to store Y position
+     * @param orientation Pointer to store orientation
+     */
+    /**
+     * Get the true position estimate.
+     * @return false if data has never been set or has not been updated within TRUE_POSE_STALE_TIMEOUT_MS
+     */
+    bool getTruePose(float* x, float* y, float* orientation);
     
     /**
      * Copy the true position estimate to the active position

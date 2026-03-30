@@ -74,12 +74,49 @@ void triggerSyncPulse() {
 
 // Wait until an absolute esp_timer_get_time() target (µs).
 // Uses vTaskDelay to yield when more than 2ms remain, then busy-waits the tail.
-static void waitUntilUs(int64_t targetUs) {
+// Returns false if vTaskDelay ran long and targetUs was already passed on wakeup.
+static bool waitUntilUs(int64_t targetUs) {
   int64_t sleepMs = (targetUs - esp_timer_get_time()) / 1000LL - 2;
   if (sleepMs > 0) {
     vTaskDelay(pdMS_TO_TICKS((uint32_t)sleepMs));
+    if (esp_timer_get_time() >= targetUs) {
+      return false;
+    }
   }
   while (esp_timer_get_time() < targetUs) {}
+  return true;
+}
+
+// --- Emag timing benchmark ---
+// Steps per frame: EMAG_COUNT * 4  (fwd ON, gap, rev ON, gap  x  each emag)
+#define BENCH_STEPS  (EMAG_COUNT * 4)
+#define BENCH_FRAMES 10
+
+static int64_t benchMin[BENCH_STEPS];
+static int64_t benchMax[BENCH_STEPS];
+static int     benchFrameCount = 0;
+static bool    benchInitialized = false;
+
+// Record a timestamp (ns relative to frame start) for step index s.
+static inline void benchRecord(int s, int64_t frameStartUs) {
+  int64_t nowUs = esp_timer_get_time();
+  int64_t relUs = nowUs - frameStartUs;
+  if (!benchInitialized || relUs < benchMin[s]) benchMin[s] = relUs;
+  if (!benchInitialized || relUs > benchMax[s]) benchMax[s] = relUs;
+}
+
+static void benchPrintAndReset() {
+  Serial.printf("\n=== Emag timing benchmark (last %d frames) ===\n", BENCH_FRAMES);
+  for (int i = 0; i < EMAG_COUNT; i++) {
+    int base = i * 4;
+    Serial.printf("  emag%d  fwd ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+0], benchMax[base+0]);
+    Serial.printf("  emag%d  gap1   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+1], benchMax[base+1]);
+    Serial.printf("  emag%d  rev ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+2], benchMax[base+2]);
+    Serial.printf("  emag%d  gap2   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+3], benchMax[base+3]);
+  }
+  Serial.println("==============================================\n");
+  benchFrameCount  = 0;
+  benchInitialized = false;
 }
 
 // FreeRTOS electromagnet task
@@ -91,7 +128,10 @@ void electromagnetTask(void *parameter) {
 
   while (1) {
     nextFrameStartUs += frameLenUs;
-    waitUntilUs(nextFrameStartUs);
+    if (!waitUntilUs(nextFrameStartUs)) {
+      Serial.println("Frame skipped: overrun at frame start");
+      continue;
+    }
 
     // --- Frame start ---
 
@@ -111,25 +151,37 @@ void electromagnetTask(void *parameter) {
       int64_t interFrameTimeUs = nextFrameStartUs;
 
       for (int i = 0; i < EMAG_COUNT && emagEnabled; i++) {
+        int base = i * 4;
+
         // Forward ON
+        benchRecord(base + 0, nextFrameStartUs);
         setElectromagnet(i, true, true);
         interFrameTimeUs += fwdOnUs;
         waitUntilUs(interFrameTimeUs);
 
         // Wait
+        benchRecord(base + 1, nextFrameStartUs);
         setElectromagnet(i, false);
         interFrameTimeUs += gapUs;
         waitUntilUs(interFrameTimeUs);
 
         // Reverse ON
+        benchRecord(base + 2, nextFrameStartUs);
         setElectromagnet(i, true, false);
         interFrameTimeUs += revOnUs;
         waitUntilUs(interFrameTimeUs);
 
         // Wait
+        benchRecord(base + 3, nextFrameStartUs);
         setElectromagnet(i, false);
         interFrameTimeUs += gapUs;
         waitUntilUs(interFrameTimeUs);
+      }
+
+      benchInitialized = true;
+      benchFrameCount++;
+      if (benchFrameCount >= BENCH_FRAMES) {
+        benchPrintAndReset();
       }
     }
 

@@ -97,7 +97,7 @@ static bool send_ack_message(const uint8_t *mac_addr) {
     ack.y = y;
     ack.orientation_rad = theta;
     ack.battery_voltage = g_robot_ptr->getBatteryVoltage();
-    
+
     if (!ensure_peer_exists(mac_addr)) {
         return false;
     }
@@ -299,6 +299,7 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 return;
             }
 
+            memcpy(last_sender_mac, mac_addr, 6);
             PosSyncCommand* cmd = (PosSyncCommand*)data;
             if (!PositionEstimator_StartSync(cmd->timeout_ms)) {
                 Serial.println("ERROR: Sync already in progress");
@@ -358,6 +359,7 @@ void EspNowCommunicator_Task(void* pvParameters) {
             // It is expected that all pieces will be sending this result at the same time,
             // so a random delay is added to reduce chance of buffer overflows
             vTaskDelay(pdMS_TO_TICKS(esp_random() % 101));
+            Serial.println("SENDING ACK FOR SYNC PULSE");
             if (sync_result.detected) {
                 send_ack_message(last_sender_mac);
             } else {

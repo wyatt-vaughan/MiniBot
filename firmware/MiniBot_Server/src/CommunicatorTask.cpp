@@ -373,7 +373,8 @@ void communicatorTask(void *parameter) {
         if (result == ESP_OK) {
           Serial.println("PosSyncCommand broadcast sent");
 
-          // Trigger local sync pulse on this device's emags
+          // Trigger local sync pulse after waiting 20ms to ensure command delivery
+          vTaskDelay(pdMS_TO_TICKS(20));
           triggerSyncPulse();
 
           // Collect ACK/NACK responses for 5 * EMAG_FRAME_LEN_MS

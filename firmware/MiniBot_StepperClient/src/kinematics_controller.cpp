@@ -72,6 +72,12 @@ void KinematicsController_Task(void* pvParameters) {
     while (1) {
         uint32_t current_us = micros();
 
+        float true_x, true_y, true_theta;
+        bool valid_pose = robot->getTruePose(&true_x, &true_y, &true_theta);
+        if (valid_pose) {
+            Serial.printf("TRUE POSE: X=%.1f mm\tY=%.1f mm\tθ=%.2f rad\n", true_x, true_y, true_theta);
+        }
+
         if (MotorTestQueue_Dequeue(motor_test_queue, &motor_test_buffer, 10)) {
             last_motor_test_command_us = current_us;
             current_m0_velocity_rad_s = motor_test_buffer.m0_velocity_rad_s;
