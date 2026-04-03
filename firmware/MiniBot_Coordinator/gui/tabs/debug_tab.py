@@ -1,0 +1,211 @@
+"""
+gui/tabs/debug_tab.py  —  MiniBot Chess Swarm Coordinator
+
+Debug Messaging tab:
+  - Target ID (hex spinbox)
+  - X / Y / theta / duration fields
+  - "Send MOV" button
+  - Response log (read-only text area fed by raw serial lines)
+  - "Clear Log" button
+"""
+
+from __future__ import annotations
+
+from typing import Optional
+
+from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt
+from PyQt6.QtWidgets import (
+    QCheckBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+    QSpinBox, QTextEdit, QVBoxLayout, QWidget,
+)
+
+from comms.protocol import build_move
+from config import COMM, PIECES, PLANNING, SIMULATOR
+
+
+class DebugTab(QWidget):
+    """Debug messaging control panel tab.
+
+    Signals:
+        send_raw(bytes)              — emit bytes to the serial handler
+        simulator_mode_changed(bool) — True when simulator mode is toggled on
+    """
+
+    send_raw               = pyqtSignal(bytes)
+    simulator_mode_changed = pyqtSignal(bool)   # True = simulator active
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._build_ui()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setSpacing(8)
+
+        # --- Command fields ---
+        cmd_group = QGroupBox('Send MOV Command')
+        cl = QVBoxLayout(cmd_group)
+
+        id_row = QHBoxLayout()
+        id_row.addWidget(QLabel('Target ID (hex):'))
+        self._id_spin = QSpinBox()
+        self._id_spin.setRange(PIECES.WHITE_ID_START, PIECES.BLACK_ID_END)
+        self._id_spin.setDisplayIntegerBase(16)
+        self._id_spin.setPrefix('0x')
+        self._id_spin.setValue(PIECES.WHITE_ID_START)
+        id_row.addWidget(self._id_spin)
+        id_row.addStretch()
+        cl.addLayout(id_row)
+
+        xy_row = QHBoxLayout()
+        xy_row.addWidget(QLabel('X (mm):'))
+        self._x_spin = QDoubleSpinBox()
+        self._x_spin.setRange(-200.0, 600.0)
+        self._x_spin.setDecimals(1)
+        self._x_spin.setValue(0.0)
+        xy_row.addWidget(self._x_spin)
+
+        xy_row.addWidget(QLabel('Y (mm):'))
+        self._y_spin = QDoubleSpinBox()
+        self._y_spin.setRange(-200.0, 600.0)
+        self._y_spin.setDecimals(1)
+        self._y_spin.setValue(0.0)
+        xy_row.addWidget(self._y_spin)
+        cl.addLayout(xy_row)
+
+        theta_dur_row = QHBoxLayout()
+        theta_dur_row.addWidget(QLabel('θ (°):'))
+        self._theta_spin = QDoubleSpinBox()
+        self._theta_spin.setRange(0.0, 359.9)
+        self._theta_spin.setDecimals(1)
+        self._theta_spin.setValue(0.0)
+        self._theta_spin.setWrapping(True)
+        theta_dur_row.addWidget(self._theta_spin)
+
+        theta_dur_row.addWidget(QLabel('Duration (s):'))
+        self._dur_spin = QDoubleSpinBox()
+        self._dur_spin.setRange(0.1, 60.0)
+        self._dur_spin.setDecimals(2)
+        self._dur_spin.setSingleStep(0.5)
+        self._dur_spin.setValue(PLANNING.DEFAULT_MOVE_DURATION_MS / 1000.0)
+        theta_dur_row.addWidget(self._dur_spin)
+        cl.addLayout(theta_dur_row)
+
+        self._btn_send = QPushButton('Send MOV')
+        self._btn_send.setMinimumHeight(36)
+        self._btn_send.clicked.connect(self._on_send)
+        cl.addWidget(self._btn_send)
+
+        root.addWidget(cmd_group)
+
+        # --- Simulator ---
+        sim_group = QGroupBox('Simulator')
+        sl = QVBoxLayout(sim_group)
+
+        self._sim_check = QCheckBox('Enable Simulator Mode')
+        self._sim_check.setToolTip(
+            'When enabled, move commands are simulated locally instead of\n'
+            'being sent to the serial port.  Position is updated in real time\n'
+            'at the configured speed with boundary and collision enforcement.'
+        )
+        self._sim_check.toggled.connect(self._on_sim_toggled)
+        sl.addWidget(self._sim_check)
+
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel('Sim speed (mm/s):'))
+        self._sim_speed = QDoubleSpinBox()
+        self._sim_speed.setRange(1.0, 500.0)
+        self._sim_speed.setDecimals(1)
+        self._sim_speed.setSingleStep(10.0)
+        self._sim_speed.setValue(SIMULATOR.DEFAULT_SPEED_MM_S)
+        self._sim_speed.setToolTip('Nominal robot speed used by the simulator')
+        speed_row.addWidget(self._sim_speed)
+        speed_row.addStretch()
+        sl.addLayout(speed_row)
+
+        root.addWidget(sim_group)
+
+        # --- Response log ---
+        log_group = QGroupBox('Response Log')
+        ll = QVBoxLayout(log_group)
+        self._log = QTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setPlaceholderText('Serial responses will appear here…')
+        self._log.setMinimumHeight(200)
+        ll.addWidget(self._log)
+
+        btn_row = QHBoxLayout()
+        self._btn_clear = QPushButton('Clear Log')
+        self._btn_clear.clicked.connect(self._log.clear)
+        btn_row.addWidget(self._btn_clear)
+        btn_row.addStretch()
+        ll.addLayout(btn_row)
+        root.addWidget(log_group)
+
+        root.addStretch()
+
+    # ------------------------------------------------------------------
+    # Public slots
+    # ------------------------------------------------------------------
+
+    @pyqtSlot(str)
+    def on_raw_line_received(self, line: str) -> None:
+        """Append a raw serial line to the response log."""
+        self._log.append(f'← {line}')
+
+    @pyqtSlot(int, str)
+    def on_error_received(self, piece_id: int, reason: str) -> None:
+        self._log.append(
+            f'<span style="color:red">ERR 0x{piece_id:02X}: {reason}</span>'
+        )
+
+    @pyqtSlot(int)
+    def on_ack_received(self, piece_id: int) -> None:
+        self._log.append(
+            f'<span style="color:green">ACK 0x{piece_id:02X}</span>'
+        )
+
+    # ------------------------------------------------------------------
+    # Button handler
+    # ------------------------------------------------------------------
+
+    def _on_send(self) -> None:
+        piece_id    = self._id_spin.value()
+        x_mm        = self._x_spin.value()
+        y_mm        = self._y_spin.value()
+        theta_deg   = self._theta_spin.value()
+        duration_ms = int(self._dur_spin.value() * 1000)
+
+        data = build_move(piece_id, x_mm, y_mm, theta_deg, duration_ms)
+        self._log.append(f'→ {data.decode(COMM.ENCODING).strip()}')
+        self.send_raw.emit(data)
+
+    def _on_sim_toggled(self, enabled: bool) -> None:
+        mode_str = 'ON' if enabled else 'OFF'
+        self._log.append(f'[SIM] Simulator mode {mode_str}')
+        self.simulator_mode_changed.emit(enabled)
+
+    # ------------------------------------------------------------------
+    # Simulator log relay
+    # ------------------------------------------------------------------
+
+    @pyqtSlot(str)
+    def on_sim_log(self, message: str) -> None:
+        """Show simulator events in the response log."""
+        self._log.append(f'<span style="color:#888">{message}</span>')
+
+    # ------------------------------------------------------------------
+    # Properties (read by MainWindow)
+    # ------------------------------------------------------------------
+
+    @property
+    def is_simulator_enabled(self) -> bool:
+        return self._sim_check.isChecked()
+
+    @property
+    def simulator_speed_mm_s(self) -> float:
+        return self._sim_speed.value()

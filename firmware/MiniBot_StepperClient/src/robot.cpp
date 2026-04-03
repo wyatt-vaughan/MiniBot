@@ -137,8 +137,12 @@ void Robot::updateTruePosition() {
 }
 
 void Robot::setTruePose(float x, float y, float theta) {
-    uint32_t now_us = micros();
+    if (is_moving) {
+        // Don't update true pose while actively moving, steppers are probably very noisy
+        return;
+    }
 
+    uint32_t now_us = micros();
     xSemaphoreTake(true_pose_mutex, portMAX_DELAY);
 
     if (!true_pose_initialized) {

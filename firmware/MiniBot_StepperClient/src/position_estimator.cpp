@@ -98,6 +98,28 @@ static void trimAndAverageSamples(const EmagReading* reading, float* avg_x, floa
     }
 }
 
+static bool noiseCorrectedAngle(const float fwd_x, const float fwd_y, const float rev_x, const float rev_y, float* angle_rad) {
+    float fwd_azimuth = atan2f(fwd_y, fwd_x);
+    float rev_azimuth = atan2f(rev_y, rev_x) + (float)M_PI;
+    if (rev_azimuth > (float)M_PI) rev_azimuth -= 2.0f * (float)M_PI;
+
+    // calculate the average angle accounting for wraparound
+    float angle_delta = min(fabsf(fwd_azimuth - rev_azimuth), 2.0f * (float)M_PI - fabsf(fwd_azimuth - rev_azimuth));
+    if (angle_delta > EMAG_MAX_ANGLE_DELTA_RAD) {
+        return false;
+    }
+
+    if (fabsf(fwd_azimuth - rev_azimuth) > (float)M_PI) {
+        // Angles straddle the ±π boundary — shift the sum up by 2π before averaging, then normalize
+        *angle_rad = (fwd_azimuth + rev_azimuth + 2.0f * (float)M_PI) / 2.0f;
+        if (*angle_rad > (float)M_PI) *angle_rad -= 2.0f * (float)M_PI;
+    } else {
+        *angle_rad = (fwd_azimuth + rev_azimuth) / 2.0f;
+    }
+    
+    return true;
+}
+
 static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData* processed_data, bool debug_print=false) {
     uint8_t valid_count = 0;
 
@@ -158,26 +180,29 @@ static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData
                 }
                 valid_count++;
 
-                // Calculate noise corrected azimuth and elevation angles
-                float azimuth_fwd = fmodf(atan2f(avg_fwd_y, avg_fwd_x) + 2.0f * (float)M_PI, 2.0f * (float)M_PI);
-                float azimuth_rev = fmodf(atan2f(avg_rev_y, avg_rev_x) + 3.0f * (float)M_PI, 2.0f * (float)M_PI);
-                if (debug_print) {
-                    Serial.printf("  fwd azimuth: %.2f rad  rev azimuth: %.2f rad\n", azimuth_fwd, azimuth_rev);
+                float azimuth_rad;
+                if (noiseCorrectedAngle(avg_fwd_x, avg_fwd_y, avg_rev_x, avg_rev_y, &azimuth_rad)) {
+                    processed_data[i].azimuth_angle_rad = azimuth_rad;
                 }
-                processed_data[i].azimuth_angle_rad = (azimuth_fwd + azimuth_rev) / 2.0f;
+                else {
+                    Serial.println("  WARNING: Large azimuth angle difference, skipping calculation for this emag");
+                }
 
-                float elevation_fwd = fmodf(atan2f(avg_fwd_z, sqrtf(avg_fwd_x * avg_fwd_x + avg_fwd_y * avg_fwd_y)) + 2.0f * (float)M_PI, 2.0f * (float)M_PI);
-                float elevation_rev = fmodf(atan2f(avg_rev_z, sqrtf(avg_rev_x * avg_rev_x + avg_rev_y * avg_rev_y)) + 3.0f * (float)M_PI, 2.0f * (float)M_PI);
-                if (debug_print) {
-                    Serial.printf("  fwd elevation: %.2f rad  rev elevation: %.2f rad\n", elevation_fwd, elevation_rev);
+                float elevation_rad;
+                if (noiseCorrectedAngle(avg_fwd_z, sqrtf(avg_fwd_x * avg_fwd_x + avg_fwd_y * avg_fwd_y), avg_rev_z, sqrtf(avg_rev_x * avg_rev_x + avg_rev_y * avg_rev_y), &elevation_rad)) {
+                    processed_data[i].elevation_angle_rad = elevation_rad;
                 }
-                processed_data[i].elevation_angle_rad = (elevation_fwd + elevation_rev) / 2.0f;
-            } else {
+                else {
+                    Serial.println("  WARNING: Large elevation angle difference, skipping calculation for this emag");
+                }
+            }
+            else {
                 if (debug_print) {
                     Serial.println(" [INVALID - below signal threshold]");
                 }
             }
-        } else {
+        }
+        else {
             if (debug_print) {
                 Serial.println("  insufficient fwd/rev samples - skipped");
             }
