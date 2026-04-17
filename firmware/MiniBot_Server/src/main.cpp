@@ -9,9 +9,8 @@
 #include "CommunicatorTask.h"
 #include "QueueStructs.h"
 #include "ElectromagnetTask.h"
-#include "PythonCommTask.h"
-#include "I2CCommTask.h"
 #include "LEDStatusTask.h"
+#include "SerialTask.h"
 
 // WiFi Configuration
 const char* ssid = "ChessBot-Server";
@@ -22,32 +21,35 @@ IPAddress gateway(192, 168, 4, 1);
 IPAddress subnet(255, 255, 255, 0);
 
 void setup() {
-  Serial.begin(115200);
-  Serial.println("\n\nMiniBot Server Starting...");
-  
-  // Create FreeRTOS Queues
+  // Initialize serial task first, to allow for debug prints if enabled
+  initSerial();
+
+  DEBUG_PRINTLN("\n\nMiniBot Server Starting...");
   initQueues();
-  
-  // Initialize WiFi
+
+  #if ENABLE_WEB_GUI
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(local_IP, gateway, subnet);
   WiFi.softAP(ssid, password, wifiChannel);
+  #else
+  WiFi.mode(WIFI_STA);
+  #endif
+  
 
   Serial.print("AP IP address: ");
-  Serial.println(WiFi.softAPIP());
+  DEBUG_PRINTLN(WiFi.softAPIP());
   
   // Initialize ESP-NOW
   initESPNow();
   
-#if ENABLE_JOYSTICK_MODE
-  // Initialize Joystick mode
+  #if ENABLE_JOYSTICK_MODE
   initJoystick();
-  Serial.println("Running in JOYSTICK MODE");
-#else
-  // Initialize GUI mode
+  DEBUG_PRINTLN("Running in JOYSTICK MODE");
+  #endif
+  #if ENABLE_WEB_GUI
   initGUI();
-  Serial.println("Running in GUI MODE");
-#endif
+  DEBUG_PRINTLN("Running in GUI MODE");
+  #endif
   
   // Initialize Electromagnets
   initElectromagnets();
@@ -55,14 +57,8 @@ void setup() {
   // Initialize LED status indicator
   initLEDStatus();
   
-  // Initialize Python Serial communication
-  // initPythonComm();
-  
-  // Initialize I2C communication
-  // initI2CComm();
-  
   // Create FreeRTOS Tasks
-#if ENABLE_JOYSTICK_MODE
+  #if ENABLE_JOYSTICK_MODE
   xTaskCreatePinnedToCore(
     joystickTask,      // Task function
     "Joystick Task",   // Task name
@@ -72,7 +68,8 @@ void setup() {
     &joystickTaskHandle, // Task handle
     1                  // Core (0 or 1)
   );
-#else
+  #endif
+  #if ENABLE_WEB_GUI
   xTaskCreatePinnedToCore(
     guiTask,           // Task function
     "GUI Task",        // Task name
@@ -82,14 +79,14 @@ void setup() {
     &guiTaskHandle,    // Task handle
     0                  // Core (0 or 1)
   );
-#endif
+  #endif
   
   xTaskCreatePinnedToCore(
     communicatorTask,  // Task function
     "Comm Task",       // Task name
     4096,              // Stack size (bytes)
     NULL,              // Parameter
-    2,                 // Priority
+    3,                 // Priority
     &commTaskHandle,   // Task handle
     0                  // Core (0 or 1)
   );
@@ -99,7 +96,7 @@ void setup() {
     "Emag Task",       // Task name
     2048,              // Stack size (bytes)
     NULL,              // Parameter
-    1,                 // Priority (lower than comm/gui)
+    4,                 // Priority (lower than comm/gui)
     &emagTaskHandle,   // Task handle
     1                  // Core (0 or 1)
   );
@@ -114,27 +111,17 @@ void setup() {
     0                     // Core (0 or 1)
   );
   
-  // xTaskCreatePinnedToCore(
-  //   pythonCommTask,    // Task function
-  //   "Python Task",     // Task name
-  //   4096,              // Stack size (bytes)
-  //   NULL,              // Parameter
-  //   2,                 // Priority
-  //   &pythonCommTaskHandle, // Task handle
-  //   1                  // Core (0 or 1)
-  // );
-  
-  // xTaskCreatePinnedToCore(
-  //   i2cCommTask,       // Task function
-  //   "I2C Task",        // Task name
-  //   4096,              // Stack size (bytes)
-  //   NULL,              // Parameter
-  //   2,                 // Priority
-  //   &i2cCommTaskHandle, // Task handle
-  //   0                  // Core (0 or 1)
-  // );
-  
-  Serial.println("Setup complete!");
+  xTaskCreatePinnedToCore(
+    serialTask,          // Task function
+    "Serial Task",       // Task name
+    3072,                // Stack size (bytes)
+    NULL,                // Parameter
+    3,                   // Priority
+    &serialTaskHandle,   // Task handle
+    0                    // Core (0 or 1)
+  );
+
+  DEBUG_PRINTLN("Setup complete!");
 }
 
 // ============================================

@@ -7,12 +7,13 @@ Usage:
     handler = SerialHandler()
     handler.position_received.connect(my_slot)
     handler.connect_port('/dev/ttyUSB0', 115200)
-    handler.send(build_poll())
+    handler.send(build_position_request(piece_id))
     handler.disconnect_port()
 """
 
 from __future__ import annotations
 
+import math
 import queue
 from typing import Optional
 
@@ -38,10 +39,11 @@ class _SerialWorker(QObject):
     """
 
     # Outgoing: parsed responses
-    position_received  = pyqtSignal(int, float, float, float)  # id, x, y, theta
+    position_received  = pyqtSignal(int, float, float, float, float)  # id, x, y, theta_deg, battery_v
     ack_received       = pyqtSignal(int)                        # id
     error_received     = pyqtSignal(int, str)                   # id, reason
-    poll_done          = pyqtSignal()
+    mag_field_received = pyqtSignal(int, float, float, float)  # id, bx, by, bz
+    pong_received      = pyqtSignal()
     raw_line_received  = pyqtSignal(str)                        # raw text for debug log
     connection_changed = pyqtSignal(bool)                       # True=connected
     worker_error       = pyqtSignal(str)                        # unrecoverable error msg
@@ -55,6 +57,7 @@ class _SerialWorker(QObject):
         self._running:    bool          = False
         self._send_queue: queue.Queue[bytes] = queue.Queue()
         self._serial:     Optional[serial.Serial] = None
+        self._rx_buf:     bytes         = b''  # incomplete-line carry buffer
 
     # ------------------------------------------------------------------
     # Public API (called from GUI thread — thread-safe via queue / flags)
@@ -89,6 +92,26 @@ class _SerialWorker(QObject):
 
         try:
             while self._running:
+                # --- check for backlog and flush if needed ---
+                if self._send_queue.qsize() > COMM.SEND_QUEUE_MAX_DEPTH:
+                    dropped = 0
+                    while self._send_queue.qsize() > 1:  # keep only the newest
+                        try:
+                            self._send_queue.get_nowait()
+                            dropped += 1
+                        except queue.Empty:
+                            break
+                    if dropped:
+                        self.worker_error.emit(
+                            f"Send queue overflow: dropped {dropped} frame(s)"
+                        )
+                    if self._serial.in_waiting > COMM.RX_FLUSH_THRESHOLD_BYTES:
+                        stale_bytes = self._serial.in_waiting
+                        self._serial.reset_input_buffer()
+                        self.worker_error.emit(
+                            f"RX buffer flushed ({stale_bytes} bytes stale)"
+                        )
+
                 # --- drain send queue ---
                 while not self._send_queue.empty():
                     try:
@@ -104,16 +127,28 @@ class _SerialWorker(QObject):
                 if not self._running:
                     break
 
-                # --- read one line (non-blocking due to timeout) ---
+                # --- bulk-read then process all complete lines ---
                 try:
-                    raw = self._serial.readline()
+                    # Read everything currently in the OS buffer in one syscall.
+                    waiting = self._serial.in_waiting
+                    if waiting:
+                        self._rx_buf += self._serial.read(waiting)
+                    else:
+                        # Nothing ready — block up to READ_TIMEOUT_S for next byte.
+                        byte = self._serial.read(1)
+                        if byte:
+                            self._rx_buf += byte
+
+                    # Process every complete newline-terminated line.
+                    while b'\n' in self._rx_buf:
+                        line, self._rx_buf = self._rx_buf.split(b'\n', 1)
+                        if line:
+                            self._dispatch(line)
+
                 except serial.SerialException as exc:
                     self.worker_error.emit(f"Read error: {exc}")
                     self._running = False
                     break
-
-                if raw:
-                    self._dispatch(raw)
 
         finally:
             if self._serial and self._serial.is_open:
@@ -129,25 +164,49 @@ class _SerialWorker(QObject):
     # Internal
     # ------------------------------------------------------------------
 
+    # ACK prefix bytes for fast-path detection: b'>3,'
+    _ACK_PREFIX = f'{COMM.MSG_PREFIX}{COMM.RESP_ACK}{COMM.DELIMITER}'.encode('ascii')
+
     def _dispatch(self, raw: bytes) -> None:
-        """Parse a raw line and emit the appropriate signal."""
+        """Parse a raw line and emit the appropriate signal.
+
+        Fast path: ACK (msg_id=3) messages are parsed inline without
+        constructing a ParsedMessage, avoiding dataclass overhead on the
+        hot path.  raw_line_received is NOT emitted for position ACKs so
+        the debug QTextEdit doesn't receive 10+ updates/second.
+        """
+        # ---- fast path: position ACK ----
+        if raw.startswith(self._ACK_PREFIX):
+            try:
+                parts = raw.split(b',')
+                if len(parts) == 7:
+                    piece_id  = int(parts[1], 16)
+                    x_mm      = float(parts[2])
+                    y_mm      = float(parts[3])
+                    theta_deg = math.degrees(float(parts[4]))
+                    battery_v = float(parts[6].strip())
+                    self.position_received.emit(piece_id, x_mm, y_mm, theta_deg, battery_v)
+                    self.ack_received.emit(piece_id)
+                    return
+            except (ValueError, IndexError):
+                pass  # fall through to slow path
+
+        # ---- slow path: everything else ----
         msg: ParsedMessage = parse_line(raw)
         self.raw_line_received.emit(msg.raw)
 
-        if msg.msg_type == COMM.RESP_POSITION and msg.piece_id is not None:
-            self.position_received.emit(
-                msg.piece_id,
-                msg.x_mm     or 0.0,
-                msg.y_mm     or 0.0,
-                msg.theta_deg or 0.0,
-            )
-        elif msg.msg_type == COMM.RESP_ACK and msg.piece_id is not None:
-            self.ack_received.emit(msg.piece_id)
-        elif msg.msg_type == COMM.RESP_ERROR and msg.piece_id is not None:
+        if msg.msg_type == COMM.RESP_NACK and msg.piece_id is not None:
             self.error_received.emit(msg.piece_id, msg.reason or '')
-        elif msg.msg_type == COMM.RESP_DONE:
-            self.poll_done.emit()
-        # UNKNOWN lines are still emitted via raw_line_received above
+        elif msg.msg_type == COMM.RESP_MAG_FIELD and msg.piece_id is not None:
+            self.mag_field_received.emit(
+                msg.piece_id,
+                msg.mag_x or 0.0,
+                msg.mag_y or 0.0,
+                msg.mag_z or 0.0,
+            )
+        elif msg.msg_type == COMM.RESP_PONG:
+            self.pong_received.emit()
+        # UNKNOWN and PARSE_ERROR lines are still surfaced via raw_line_received above
 
 
 # ---------------------------------------------------------------------------
@@ -162,10 +221,11 @@ class SerialHandler(QObject):
     """
 
     # Mirror worker signals (re-emitted so callers connect here, not to worker)
-    position_received  = pyqtSignal(int, float, float, float)
+    position_received  = pyqtSignal(int, float, float, float, float)
     ack_received       = pyqtSignal(int)
     error_received     = pyqtSignal(int, str)
-    poll_done          = pyqtSignal()
+    mag_field_received = pyqtSignal(int, float, float, float)
+    pong_received      = pyqtSignal()
     raw_line_received  = pyqtSignal(str)
     connection_changed = pyqtSignal(bool)          # True=connected
     serial_error       = pyqtSignal(str)
@@ -199,7 +259,8 @@ class SerialHandler(QObject):
         self._worker.position_received.connect(self.position_received)
         self._worker.ack_received.connect(self.ack_received)
         self._worker.error_received.connect(self.error_received)
-        self._worker.poll_done.connect(self.poll_done)
+        self._worker.mag_field_received.connect(self.mag_field_received)
+        self._worker.pong_received.connect(self.pong_received)
         self._worker.raw_line_received.connect(self.raw_line_received)
         self._worker.worker_error.connect(self.serial_error)
         self._worker.connection_changed.connect(self._on_connection_changed)

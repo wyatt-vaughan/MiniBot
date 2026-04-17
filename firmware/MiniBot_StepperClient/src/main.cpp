@@ -87,11 +87,19 @@ static bool create_tasks(void) {
     }
     Serial.println("Position Estimator Calc task created successfully");
     
+    static BatteryMonitorParams battery_monitor_params = {
+        .robot                          = &robot,
+        .kinematics_task                = kinematics_task_handle,
+        .communicator_task              = communicator_task_handle,
+        .position_estimator_sensor_task = position_estimator_sensor_task_handle,
+        .position_estimator_calc_task   = position_estimator_calc_task_handle,
+    };
+
     task_created = xTaskCreatePinnedToCore(
         BatteryMonitor_Task,
         "BatteryMonitor",
         2048,
-        (void*)&robot,
+        (void*)&battery_monitor_params,
         1,
         &battery_monitor_task_handle,
         0
@@ -219,5 +227,6 @@ void setup() {
 }
 
 void loop() {
+
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

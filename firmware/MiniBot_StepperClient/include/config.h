@@ -21,6 +21,7 @@
 #define BATTERY_VOLTAGE_PIN  1
 #define BATTERY_VOLTAGE_DIVIDER_RATIO 1.84f
 #define BATTERY_CRITICAL_VOLTAGE 3.2f
+#define BATTERY_CHARGING_VOLTAGE 4.6f
 #define BATTERY_POLL_INTERVAL_MS 500
 #define BATTERY_AVG_WINDOW_SIZE 20
 
@@ -56,7 +57,7 @@
 
 // Linear motion constraints
 #define ROBOT_MAX_VELOCITY_MM_S    200.0f   // Maximum linear velocity (mm/s) NOT USED
-#define ROBOT_MAX_ACCEL_MM_S2      200.0f    // Maximum linear acceleration (mm/s²)
+#define ROBOT_MAX_ACCEL_MM_S2      250.0f    // Maximum linear acceleration (mm/s²)
 
 // Rotational motion constraints
 #define MAX_ROT_VEL_RAD_S          2.0f     // Maximum angular velocity (rad/s)
@@ -105,6 +106,8 @@
 // ============================================================================
 
 #define MOTION_DEBUG_LOGGING        true    // Enable detailed motion control debug output
+#define SPAM_POSITION               false
+#define ENABLE_BOT_WHILE_CHARGING   true
 
 // ============================================================================
 // Electromagnet Positioning System Configuration
@@ -112,15 +115,14 @@
 
 // Electromagnet positions (x, y) in mm relative to the platform origin
 // Add one entry per electromagnet; array length must match EMAG_COUNT
-#define EMAG_POSITIONS_MM            { {0.0f, 0.0f}, {125.0f, 0.0f} }
+#define EMAG_POSITIONS_MM            { {250.0f, 156.7f}, {150.0f, 156.7f}, {200.0f, 243.3f} }
 
 // Electromagnet frame timing setup
 #define EMAG_FRAME_LEN_MS            100    // Total frame length
-#define EMAG_COUNT                   2      // Number of electromagnets in platform
-#define EMAG_FWD_ON_TIME_MS          8      // How long forward power is applied
-#define EMAG_REV_ON_TIME_MS          8      // How long reverse power is applied
-#define EMAG_GAP_TIME_MS             1      // Time between changing electromagnet states
-#define EMAG_TRIM_MS                 2      // Samples closer than this to state changes are ignored
+#define EMAG_COUNT                   3      // Number of electromagnets in platform
+#define EMAG_FWD_ON_TIME_MS          7      // How long forward power is applied
+#define EMAG_REV_ON_TIME_MS          7      // How long reverse power is applied
+#define EMAG_TRIM_MS                 1.5      // Samples closer than this to state changes are ignored
 
 // Sampling
 #define EMAG_MIN_SAMPLE_PERIOD_US    900   // 1 kHz sampling period, set faster to avoid missed readings (µs)
@@ -129,8 +131,14 @@
 // Detection thresholds
 #define FIELD_THRESHOLD_GAUSS        0.5f   // Minimum field magnitude to detect emag active
 
+// Magnetometer sensor offset from robot center, in robot body frame (mm)
+// Positive X = forward, positive Y = left
+#define SENSOR_OFFSET_X_MM           -7.3f
+#define SENSOR_OFFSET_Y_MM           8.1f
+
 // Other stuff :)
-#define TRUE_POSE_LPF_CUTOFF_HZ      1.0f
+#define TRUE_POSE_LPF_CUTOFF_HZ      0.5f
+#define TRUE_POSE_LPF_REF_CONFIDENCE 1.0f    // Reference confidence for full LPF response; lower values → faster tracking
 #define TRUE_POSE_STALE_TIMEOUT_MS   1000   // Max age of true pose before it is considered stale
 #define EMAG_MIN_SIGNAL_GAUSS        0.5f   // Minimum fwd-rev differential magnitude to consider an emag reading valid
 #define EMAG_MAX_ANGLE_DELTA_RAD     0.8f   // Maximum allowed difference between forward and reverse azimuth angles for the same emag

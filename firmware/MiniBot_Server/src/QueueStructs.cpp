@@ -1,4 +1,5 @@
 #include "QueueStructs.h"
+#include "config.h"
 #include <Arduino.h>
 
 // Queue handle definitions
@@ -15,9 +16,9 @@ void initQueues() {
   
   if (commandQueue == NULL || guiStatusQueue == NULL || 
       pythonStatusQueue == NULL || i2cStatusQueue == NULL) {
-    Serial.println("Failed to create queues!");
+    DEBUG_PRINTLN("Failed to create queues!");
   } else {
-    Serial.println("Queues created successfully");
+    DEBUG_PRINTLN("Queues created successfully");
   }
 }
 

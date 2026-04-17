@@ -17,14 +17,14 @@ Coordinate space:
 
 Signals:
   piece_selected(int)               — emitted when user clicks near a piece
-  target_set(int, float, float)     — left-click target: immediate dispatch
-  target_queued(int, float, float)  — right-click target: add to move queue
+  target_set(int, float, float)     — left-click target: plan + add to move queue
+  target_queued(int, float, float)  — right-click target: immediate dispatch
 """
 
 from __future__ import annotations
 
 import math
-from typing import Dict, Optional, Tuple
+from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, pyqtSignal
 from PyQt6.QtGui import (
@@ -45,8 +45,8 @@ class ChessBoardWidget(QWidget):
     """
 
     piece_selected = pyqtSignal(int)               # piece_id
-    target_set     = pyqtSignal(int, float, float) # piece_id, x_mm, y_mm  (left-click → immediate)
-    target_queued  = pyqtSignal(int, float, float) # piece_id, x_mm, y_mm  (right-click → queue)
+    target_set     = pyqtSignal(int, float, float) # piece_id, x_mm, y_mm  (left-click → plan + queue)
+    target_queued  = pyqtSignal(int, float, float) # piece_id, x_mm, y_mm  (right-click → immediate dispatch)
 
     # ------------------------------------------------------------------
     # Logical canvas constants (mm)
@@ -61,6 +61,8 @@ class ChessBoardWidget(QWidget):
         self._board = board_state
         self._selected_id: Optional[int] = None
         self._target: Optional[Tuple[float, float]] = None  # mm in playing area
+        self._hide_stale:  bool = False
+        self._stale_ids:   Set[int] = set()
 
         self.setMinimumSize(
             int(BOARD.CANVAS_WIDTH_MM  * GUI.SCALE_FACTOR),
@@ -77,6 +79,12 @@ class ChessBoardWidget(QWidget):
 
     def refresh(self) -> None:
         """Trigger a repaint (call after updating BoardState externally)."""
+        self.update()
+
+    def set_stale_pieces(self, stale_ids: Set[int], hide: bool) -> None:
+        """Update the set of piece IDs considered stale and whether to hide them."""
+        self._stale_ids  = stale_ids
+        self._hide_stale = hide
         self.update()
 
     def clear_selection(self) -> None:
@@ -268,9 +276,11 @@ class ChessBoardWidget(QWidget):
         for piece in self._board.all_pieces():
             if piece.is_captured:
                 continue
-            self._draw_piece(p, piece)
+            if self._hide_stale and piece.piece_id in self._stale_ids:
+                continue
+            self._draw_piece(p, piece, stale=piece.piece_id in self._stale_ids)
 
-    def _draw_piece(self, p: QPainter, piece: Piece) -> None:
+    def _draw_piece(self, p: QPainter, piece: Piece, stale: bool = False) -> None:
         cx, cy = self._pa_to_canvas(piece.x_mm, piece.y_mm)
         r      = float(PIECES.CIRCLE_RADIUS_MM)
         is_sel = (piece.piece_id == self._selected_id)
@@ -278,6 +288,11 @@ class ChessBoardWidget(QWidget):
         white  = piece.color == 'white'
         fill   = QColor(GUI.WHITE_PIECE_FILL   if white else GUI.BLACK_PIECE_FILL)
         outline= QColor(GUI.WHITE_PIECE_OUTLINE if white else GUI.BLACK_PIECE_OUTLINE)
+
+        # Dim stale pieces
+        if stale:
+            fill.setAlpha(60)
+            outline.setAlpha(60)
 
         # --- Selection highlight ---
         if is_sel:
@@ -296,8 +311,8 @@ class ChessBoardWidget(QWidget):
 
         # --- Orientation line (from center outward in facing direction) ---
         ol      = float(PIECES.ORIENTATION_LINE_MM)
-        # theta=0 means facing +Y; canvas Y is inverted so subtract theta
-        theta_canvas = math.radians(-piece.orientation_deg + 90)
+        # theta=0 means facing +X; canvas uses Y-down so negate the sin term
+        theta_canvas = math.radians(piece.orientation_deg)
         ex = cx + ol * math.cos(theta_canvas)
         ey = cy - ol * math.sin(theta_canvas)
 

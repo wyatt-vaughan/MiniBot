@@ -9,7 +9,7 @@ Run with:
 
 import sys
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QStyleFactory
 
 from gui.main_window import MainWindow
 
@@ -18,6 +18,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName('MiniBot Coordinator')
     app.setOrganizationName('MiniBot')
+    app.setStyle(QStyleFactory.create('Fusion'))
 
     window = MainWindow()
     window.show()

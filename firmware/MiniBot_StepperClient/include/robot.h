@@ -172,15 +172,16 @@ public:
      * Uses odometry to calculate position change
      * This is called continuously by the position estimator task
      */
-    void updateTruePosition();
+    void updateEstimatedPosition();
     
     /**
      * Set the true position estimate from external source (e.g., magnetic positioning)
      * @param x X position in mm
      * @param y Y position in mm
      * @param theta Orientation in radians
+     * @param confidence Solution confidence (higher = more responsive LPF)
      */
-    void setTruePose(float x, float y, float theta);
+    void setTruePose(float x, float y, float theta, float confidence = 1.0f);
 
     /**
      * Get current robot sensed position
@@ -199,7 +200,7 @@ public:
      * This should be called by tasks that need to sync the active position
      * with the latest position estimate (e.g., after motion completion)
      */
-    void updatePositionFromEstimate();
+    void updatePositionFromTruePose();
     
     /**
      * Get current robot position
@@ -260,7 +261,23 @@ public:
      * @return Battery voltage in volts
      */
     bool getBatteryCritical() const { return battery_voltage < low_battery_v_threshold; }
-    
+
+    /**
+     * Get battery voltage
+     * @return Battery voltage in volts
+     */
+    bool getBatteryCharging() const { return battery_voltage >= BATTERY_CHARGING_VOLTAGE; }
+
+    /**
+     * Disable both stepper motor drivers
+     */
+    void disableMotors();
+
+    /**
+     * Enable both stepper motor drivers
+     */
+    void enableMotors();
+
     /**
      * Check if robot is currently executing a motion
      * @return true if moving, false if idle

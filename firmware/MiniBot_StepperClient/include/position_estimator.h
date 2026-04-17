@@ -112,4 +112,13 @@ QueueHandle_t PositionEstimator_GetSyncResultQueue(void);
  */
 bool PositionEstimator_StartSync(uint16_t timeout_ms);
 
+/**
+ * Set the sync reference time externally (e.g. from an ESP-NOW PosSync message).
+ * Sets sync_pulse_time_us and next_frame_time_us to sync_time_us, marks synced,
+ * and transitions the state machine to STATE_IDLE.
+ *
+ * @param sync_time_us  Absolute time (esp_timer_get_time units) of the next frame start
+ */
+void PositionEstimator_SetSyncTime(int64_t sync_time_us);
+
 #endif // __POSITION_ESTIMATOR_H__

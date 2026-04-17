@@ -44,6 +44,7 @@ class Piece:
     rank:            str          # 'pawn' | 'rook' | 'knight' | 'bishop' | 'queen' | 'king'
     position_mm:     Tuple[float, float] = field(default_factory=lambda: (0.0, 0.0))
     orientation_deg: float = 0.0
+    battery_v:       float = 0.0
     is_captured:     bool  = False
     is_staged:       bool  = False
     last_updated:    float = field(default_factory=time.time)
@@ -70,10 +71,11 @@ class Piece:
     def y_mm(self) -> float:
         return self.position_mm[1]
 
-    def update_position(self, x_mm: float, y_mm: float, theta_deg: float) -> None:
-        """Update position and orientation, recording the current timestamp."""
+    def update_position(self, x_mm: float, y_mm: float, theta_deg: float, battery_v: float = 0.0) -> None:
+        """Update position, orientation and battery voltage, recording the current timestamp."""
         self.position_mm     = (x_mm, y_mm)
         self.orientation_deg = theta_deg
+        self.battery_v       = battery_v
         self.last_updated    = time.time()
 
 
@@ -163,11 +165,12 @@ class BoardState:
         x_mm: float,
         y_mm: float,
         theta_deg: float,
+        battery_v: float = 0.0,
     ) -> None:
         """Update a single piece's position (typically called from serial handler)."""
         piece = self._pieces.get(piece_id)
         if piece is not None:
-            piece.update_position(x_mm, y_mm, theta_deg)
+            piece.update_position(x_mm, y_mm, theta_deg, battery_v)
 
     # ------------------------------------------------------------------
     # Chess engine integration — FEN export

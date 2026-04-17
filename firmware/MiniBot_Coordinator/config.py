@@ -2,6 +2,7 @@
 # config.py  —  MiniBot Chess Swarm Coordinator
 # All constants and "magic numbers" live here, broken out by section.
 # =============================================================================
+import math
 
 # ---------------------------------------------------------------------------
 # BOARD — physical geometry (all units in mm unless noted)
@@ -11,10 +12,10 @@ class BOARD:
     NUM_SQUARES            = 8        # 8×8 board
     PLAYING_AREA_MM        = SQUARE_SIZE_MM * NUM_SQUARES  # 400 mm
 
-    BORDER_TOP_MM          = 25
-    BORDER_BOTTOM_MM       = 25
-    BORDER_LEFT_MM         = 125
-    BORDER_RIGHT_MM        = 125
+    BORDER_TOP_MM          = 10
+    BORDER_BOTTOM_MM       = 10
+    BORDER_LEFT_MM         = 100
+    BORDER_RIGHT_MM        = 100
 
     # Total canvas in mm (logical coordinate space)
     CANVAS_WIDTH_MM        = PLAYING_AREA_MM + BORDER_LEFT_MM + BORDER_RIGHT_MM  # 650
@@ -48,7 +49,7 @@ class PIECES:
         'pawn':   'P',
     }
 
-    CIRCLE_RADIUS_MM       = 20       # piece circle radius
+    CIRCLE_RADIUS_MM       = 15.5       # piece circle radius
     ORIENTATION_LINE_MM    = 16       # length of orientation marker from center
     ORIENTATION_LINE_WIDTH_MM = 1.5
 
@@ -56,7 +57,7 @@ class PIECES:
     ID_FONT_SIZE_PT        = 6
 
     # Home positions: maps piece ID (int) → (x_mm, y_mm, theta_deg)
-    # x,y are center of piece; theta=0 means facing +Y (toward opponent)
+    # x,y are center of piece; theta=0 means facing +X (to the right)
     # Origin (0,0) is bottom-left corner of the PLAYING AREA.
     # Squares are labeled a-h (columns, x) and 1-8 (rows, y).
     # Square center col c, row r  →  x = (c-0.5)*SQUARE_SIZE, y = (r-0.5)*SQUARE_SIZE
@@ -67,46 +68,46 @@ class PIECES:
     # Extra queen staged in left border (off-board, x < 0)
     HOME_POSITIONS = {
         # White pawns  (IDs 0x01–0x08, row 2)
-        0x01: ( 1*_S - _S//2,  2*_S - _S//2,   0),
-        0x02: ( 2*_S - _S//2,  2*_S - _S//2,   0),
-        0x03: ( 3*_S - _S//2,  2*_S - _S//2,   0),
-        0x04: ( 4*_S - _S//2,  2*_S - _S//2,   0),
-        0x05: ( 5*_S - _S//2,  2*_S - _S//2,   0),
-        0x06: ( 6*_S - _S//2,  2*_S - _S//2,   0),
-        0x07: ( 7*_S - _S//2,  2*_S - _S//2,   0),
-        0x08: ( 8*_S - _S//2,  2*_S - _S//2,   0),
+        0x01: ( 1*_S - _S//2,  2*_S - _S//2,   90),
+        0x02: ( 2*_S - _S//2,  2*_S - _S//2,   90),
+        0x03: ( 3*_S - _S//2,  2*_S - _S//2,   90),
+        0x04: ( 4*_S - _S//2,  2*_S - _S//2,   90),
+        0x05: ( 5*_S - _S//2,  2*_S - _S//2,   90),
+        0x06: ( 6*_S - _S//2,  2*_S - _S//2,   90),
+        0x07: ( 7*_S - _S//2,  2*_S - _S//2,   90),
+        0x08: ( 8*_S - _S//2,  2*_S - _S//2,   90),
         # White back rank  (IDs 0x09–0x10)
-        0x09: ( 1*_S - _S//2,  1*_S - _S//2,   0),  # Rook a1
-        0x0A: ( 2*_S - _S//2,  1*_S - _S//2,   0),  # Knight b1
-        0x0B: ( 3*_S - _S//2,  1*_S - _S//2,   0),  # Bishop c1
-        0x0C: ( 4*_S - _S//2,  1*_S - _S//2,   0),  # Queen d1
-        0x0D: ( 5*_S - _S//2,  1*_S - _S//2,   0),  # King e1
-        0x0E: ( 6*_S - _S//2,  1*_S - _S//2,   0),  # Bishop f1
-        0x0F: ( 7*_S - _S//2,  1*_S - _S//2,   0),  # Knight g1
-        0x10: ( 8*_S - _S//2,  1*_S - _S//2,   0),  # Rook h1
+        0x09: ( 1*_S - _S//2,  1*_S - _S//2,   90),  # Rook a1
+        0x0A: ( 2*_S - _S//2,  1*_S - _S//2,   90),  # Knight b1
+        0x0B: ( 3*_S - _S//2,  1*_S - _S//2,   90),  # Bishop c1
+        0x0C: ( 4*_S - _S//2,  1*_S - _S//2,   90),  # Queen d1
+        0x0D: ( 5*_S - _S//2,  1*_S - _S//2,   90),  # King e1
+        0x0E: ( 6*_S - _S//2,  1*_S - _S//2,   90),  # Bishop f1
+        0x0F: ( 7*_S - _S//2,  1*_S - _S//2,   90),  # Knight g1
+        0x10: ( 8*_S - _S//2,  1*_S - _S//2,   90),  # Rook h1
         # White extra queen — staged in left border (off-board)
-        0x11: (-40,             1*_S - _S//2,   0),
+        0x11: (-40,             1*_S - _S//2,   90),
 
         # Black pawns  (IDs 0x12–0x19, row 7)
-        0x12: ( 1*_S - _S//2,  7*_S - _S//2, 180),
-        0x13: ( 2*_S - _S//2,  7*_S - _S//2, 180),
-        0x14: ( 3*_S - _S//2,  7*_S - _S//2, 180),
-        0x15: ( 4*_S - _S//2,  7*_S - _S//2, 180),
-        0x16: ( 5*_S - _S//2,  7*_S - _S//2, 180),
-        0x17: ( 6*_S - _S//2,  7*_S - _S//2, 180),
-        0x18: ( 7*_S - _S//2,  7*_S - _S//2, 180),
-        0x19: ( 8*_S - _S//2,  7*_S - _S//2, 180),
+        0x12: ( 1*_S - _S//2,  7*_S - _S//2, 270),
+        0x13: ( 2*_S - _S//2,  7*_S - _S//2, 270),
+        0x14: ( 3*_S - _S//2,  7*_S - _S//2, 270),
+        0x15: ( 4*_S - _S//2,  7*_S - _S//2, 270),
+        0x16: ( 5*_S - _S//2,  7*_S - _S//2, 270),
+        0x17: ( 6*_S - _S//2,  7*_S - _S//2, 270),
+        0x18: ( 7*_S - _S//2,  7*_S - _S//2, 270),
+        0x19: ( 8*_S - _S//2,  7*_S - _S//2, 270),
         # Black back rank  (IDs 0x1A–0x21)
-        0x1A: ( 1*_S - _S//2,  8*_S - _S//2, 180),  # Rook a8
-        0x1B: ( 2*_S - _S//2,  8*_S - _S//2, 180),  # Knight b8
-        0x1C: ( 3*_S - _S//2,  8*_S - _S//2, 180),  # Bishop c8
-        0x1D: ( 4*_S - _S//2,  8*_S - _S//2, 180),  # Queen d8
-        0x1E: ( 5*_S - _S//2,  8*_S - _S//2, 180),  # King e8
-        0x1F: ( 6*_S - _S//2,  8*_S - _S//2, 180),  # Bishop f8
-        0x20: ( 7*_S - _S//2,  8*_S - _S//2, 180),  # Knight g8
-        0x21: ( 8*_S - _S//2,  8*_S - _S//2, 180),  # Rook h8
+        0x1A: ( 1*_S - _S//2,  8*_S - _S//2, 270),  # Rook a8
+        0x1B: ( 2*_S - _S//2,  8*_S - _S//2, 270),  # Knight b8
+        0x1C: ( 3*_S - _S//2,  8*_S - _S//2, 270),  # Bishop c8
+        0x1D: ( 4*_S - _S//2,  8*_S - _S//2, 270),  # Queen d8
+        0x1E: ( 5*_S - _S//2,  8*_S - _S//2, 270),  # King e8
+        0x1F: ( 6*_S - _S//2,  8*_S - _S//2, 270),  # Bishop f8
+        0x20: ( 7*_S - _S//2,  8*_S - _S//2, 270),  # Knight g8
+        0x21: ( 8*_S - _S//2,  8*_S - _S//2, 270),  # Rook h8
         # Black extra queen — staged in left border (off-board)
-        0x22: (-40,             8*_S - _S//2, 180),
+        0x22: (-40,             8*_S - _S//2, 270),
     }
 
     # Rank assignments per piece ID
@@ -134,33 +135,42 @@ class PIECES:
 # COMM — serial / USB protocol constants
 # ---------------------------------------------------------------------------
 class COMM:
-    DEFAULT_BAUD_RATE      = 115200
-    DEFAULT_POLL_INTERVAL_MS = 1000   # milliseconds between auto-polls
-    ENCODING               = 'ascii'
-    TERMINATOR             = '\n'
+    DEFAULT_BAUD_RATE        = 921600
+    DEFAULT_POLL_INTERVAL_MS = 2000   # milliseconds between auto-polls
+    ENCODING                 = 'ascii'
+    TERMINATOR               = '\n'
+    MSG_PREFIX               = '>'    # all frames begin with this character
 
-    # Command prefixes (host → ESP32)
-    CMD_MOVE               = 'MOV'
-    CMD_HOME               = 'HOME'
-    CMD_POLL               = 'POLL'
-    CMD_RATE               = 'RATE'
-    CMD_MAG                = 'MAG'
+    # Command IDs (host → ESP32)
+    CMD_MOTOR_TEST           = 0      # >0,{id},{mode},{duty1},{duty2}
+    CMD_POSITION             = 1      # >1,{id},{x_mm},{y_mm},{theta_rad},{duration_ms}
+    CMD_POSITION_REQUEST     = 2      # >2,{id}
+    CMD_MAG_FIELD_REQUEST    = 5      # >5,{id}
+    CMD_SYNC                 = 7      # >7
+    CMD_ELECTROMAGNET        = 254    # >254,{0|1}
+    CMD_PING                 = 255    # >255
 
-    # Response prefixes (ESP32 → host)
-    RESP_POSITION          = 'POS'
-    RESP_ACK               = 'ACK'
-    RESP_ERROR             = 'ERR'
-    RESP_DONE              = 'DONE'
+    # Response IDs (ESP32 → host)
+    RESP_ACK                 = 3      # >3,{id},{x_mm},{y_mm},{theta_rad},{timestamp_ms},{battery_v}
+    RESP_NACK                = 4      # >4,{id},{err_type},{timestamp_ms}
+    RESP_MAG_FIELD           = 6      # >6,{id},{bx},{by},{bz},{timestamp_ms}
+    RESP_PONG                = 255    # >255
+    RESP_PARSE_ERROR         = 'ERR'  # >ERR,{message}
 
-    # Electromagnet mode values
-    MAG_OFF                = 0
-    MAG_ON                 = 1
-    MAG_SYNC               = 2
+    # Electromagnet state
+    MAG_OFF                  = 0
+    MAG_ON                   = 1
 
-    DELIMITER              = ','
+    DELIMITER                = ','
 
     # Serial read timeout (seconds) — controls how often worker checks stop flag
-    READ_TIMEOUT_S         = 0.05
+    READ_TIMEOUT_S           = 0.05
+
+    # If the outgoing send queue exceeds this many frames, drop the oldest
+    # ones and flush the receive buffer to avoid processing stale responses.
+    SEND_QUEUE_MAX_DEPTH     = 4
+    # If the receive buffer holds more than this many bytes, discard it.
+    RX_FLUSH_THRESHOLD_BYTES = 512
 
 
 # ---------------------------------------------------------------------------
@@ -197,10 +207,10 @@ class GUI:
     STAGED_PIECE_OPACITY   = 180             # 0–255 alpha
 
     # Control panel
-    CONTROL_PANEL_MIN_WIDTH = 420
+    CONTROL_PANEL_MIN_WIDTH = 550
 
     # Position tracker table columns
-    TRACKER_COLUMNS        = ['ID', 'Color', 'Rank', 'X (mm)', 'Y (mm)', 'θ (°)', 'Last Update']
+    TRACKER_COLUMNS        = ['ID', 'Color', 'Rank', 'X (mm)', 'Y (mm)', 'θ (°)', 'Batt (V)', 'Last Update']
 
 
 # ---------------------------------------------------------------------------
@@ -243,8 +253,11 @@ class SIMULATOR:
     # Timer tick rate for simulated motion (20 Hz)
     UPDATE_INTERVAL_MS     = 50
 
-    # Maximum rotation rate in degrees per second
-    ROTATION_SPEED_DEG_S   = 90.0
+    # Rotation angular velocity in rad/s (used to compute move duration)
+    ROTATION_ANGULAR_VEL_RAD_S = 2.0
+
+    # Maximum rotation rate in degrees per second (derived)
+    ROTATION_SPEED_DEG_S   = math.degrees(ROTATION_ANGULAR_VEL_RAD_S)
 
     # Heading must be within this many degrees of the target bearing before
     # the robot begins translating (differential drive constraint).

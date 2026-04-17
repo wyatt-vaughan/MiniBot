@@ -9,13 +9,22 @@ static MotorTestQueue motor_test_queue = NULL;
 static EspNowReceiveCallback receive_callback = nullptr;
 static Robot* g_robot_ptr = NULL;
 static uint8_t last_sender_mac[6] = {0};
+static bool station_mac_established = false;
 static bool has_pending_completion_ack = false;
+
+static volatile bool waiting_for_pos_sync = false;
+static volatile int64_t pos_sync_deadline_us = 0;
+static volatile bool pos_sync_received = false;
+static volatile int64_t pos_sync_best_receive_time_us = 0;
+static volatile uint32_t pos_sync_best_ttnf_us = 0;
+static volatile int64_t pos_sync_candidate_time_us = 0;  // written in recv_cb, read in handler
 
 static void esp_now_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len);
 static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data, int len);
 static bool ensure_peer_exists(const uint8_t *mac_addr);
 static bool send_ack_message(const uint8_t *mac_addr);
 static void send_completion_ack_if_pending();
+static void pos_sync_store(int64_t receive_time_us, uint32_t ttnf_us);
 
 bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test_q) {
     if (motion_queue == NULL || motor_test_q == NULL) {
@@ -51,11 +60,22 @@ bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test
     return true;
 }
 
+static void pos_sync_store(int64_t receive_time_us, uint32_t ttnf_us) {
+    pos_sync_best_receive_time_us = receive_time_us;
+    pos_sync_best_ttnf_us = ttnf_us;
+    pos_sync_received = true;
+}
+
 static void esp_now_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
     if (mac_addr == NULL || data == NULL) {
         return;
     }
-    
+
+    // Capture timestamp as early as possible for PosSync timing accuracy
+    if (len >= 2 && waiting_for_pos_sync && data[1] == MSG_TYPE_POS_SYNC) {
+        pos_sync_candidate_time_us = esp_timer_get_time();
+    }
+
     if (receive_callback) {
         receive_callback(mac_addr, data, len);
     }
@@ -78,6 +98,16 @@ static bool ensure_peer_exists(const uint8_t *mac_addr) {
             return false;
         }
     }
+    return true;
+}
+
+static bool record_station_mac(const uint8_t *mac_addr) {
+    if (mac_addr == NULL) {
+        return false;
+    }
+    
+    memcpy(last_sender_mac, mac_addr, 6);
+    station_mac_established = true;
     return true;
 }
 
@@ -186,6 +216,16 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
     if (target_id != getDeviceID() && target_id != 0xFF) {
         return;
     }
+
+    if (!station_mac_established) {
+        if (!record_station_mac(mac_addr)) {
+            Serial.println("ERROR: Failed to record station MAC address");
+            return;
+        }
+        Serial.printf("Recorded station MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", 
+                    last_sender_mac[0], last_sender_mac[1], last_sender_mac[2], 
+                    last_sender_mac[3], last_sender_mac[4], last_sender_mac[5]);
+    }
     
     switch (msg_type) {
         case MSG_TYPE_POSITION_COMMAND: {
@@ -196,7 +236,6 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
             }
             
             PositionCommand* cmd = (PositionCommand*)data;
-            
             MotionCommand motion_cmd = {
                 cmd->target_x_mm,
                 cmd->target_y_mm,
@@ -205,8 +244,6 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
             };
             
             if (MotionQueue_Enqueue(comm_queue, &motion_cmd)) {
-                // Store sender MAC for completion ack
-                memcpy(last_sender_mac, mac_addr, 6);
                 has_pending_completion_ack = true;
                 send_ack_message(mac_addr);
             } else {
@@ -298,12 +335,31 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
-
-            memcpy(last_sender_mac, mac_addr, 6);
-            PosSyncCommand* cmd = (PosSyncCommand*)data;
-            if (!PositionEstimator_StartSync(cmd->timeout_ms)) {
-                Serial.println("ERROR: Sync already in progress");
+            if (waiting_for_pos_sync) {
+                Serial.println("ERROR: PosSync wait already in progress");
                 send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
+                return;
+            }
+            PosSyncCommand* cmd = (PosSyncCommand*)data;
+            pos_sync_received = false;
+            pos_sync_deadline_us = esp_timer_get_time() + (int64_t)cmd->timeout_ms * 1000;
+            waiting_for_pos_sync = true;
+            // EspNowCommunicator_Task will busy-wait for MSG_TYPE_POS_SYNC and send ack/nack
+            break;
+        }
+
+        case MSG_TYPE_POS_SYNC: {
+            if (waiting_for_pos_sync && len >= (int)sizeof(PosSync)) {
+                PosSync* msg = (PosSync*)data;
+                uint32_t ttnf = msg->next_frame_us;
+                int64_t candidate = pos_sync_candidate_time_us + (int64_t)ttnf;
+                // Keep the earliest-arriving pulse — minimum latency = best accuracy
+                if (!pos_sync_received || candidate < pos_sync_best_receive_time_us) {
+                    pos_sync_best_receive_time_us = candidate;
+                    pos_sync_best_ttnf_us = ttnf;  // not used anywhere just for tracking
+                    pos_sync_received = true;
+                    // Serial.printf("PosSYNC (new best): rt=%lld us\tttnf=%u us\n", (long long)candidate, ttnf);
+                }
             }
             break;
         }
@@ -353,20 +409,35 @@ void EspNowCommunicator_Task(void* pvParameters) {
             send_completion_ack_if_pending();
         }
 
-        PosSyncResult sync_result;
-        QueueHandle_t sync_q = PositionEstimator_GetSyncResultQueue();
-        if (sync_q != NULL && xQueueReceive(sync_q, &sync_result, 0) == pdTRUE) {
-            // It is expected that all pieces will be sending this result at the same time,
-            // so a random delay is added to reduce chance of buffer overflows
-            vTaskDelay(pdMS_TO_TICKS(esp_random() % 101));
-            Serial.println("SENDING ACK FOR SYNC PULSE");
-            if (sync_result.detected) {
+        // Busy-wait through the full deadline to collect all burst pulses, then use the best
+        if (waiting_for_pos_sync) {
+            while (esp_timer_get_time() < pos_sync_deadline_us) {
+                // Run to deadline: WiFi task sets pos_sync_received and updates
+                // pos_sync_best_* each time a better (earlier) pulse arrives.
+            }
+
+            if (pos_sync_received) {
+                Serial.println(pos_sync_best_receive_time_us);
+                // PositionEstimator_SetSyncTime(pos_sync_best_receive_time_us);
+
+                // Random delay to spread acks from multiple robots
+                vTaskDelay(pdMS_TO_TICKS(esp_random() % 101));
                 send_ack_message(last_sender_mac);
             } else {
+                Serial.println("PosSync timeout — no MSG_TYPE_POS_SYNC received");
                 send_nack_message(last_sender_mac, ERR_SYNC_TIMEOUT);
             }
+
+            pos_sync_received = false;
+            waiting_for_pos_sync = false;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(50));
+        #if SPAM_POSITION
+        if (station_mac_established) {
+            send_ack_message(last_sender_mac);
+        }
+        #endif
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }

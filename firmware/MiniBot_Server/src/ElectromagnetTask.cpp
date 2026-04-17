@@ -7,27 +7,28 @@ TaskHandle_t emagTaskHandle = NULL;
 // Control flags
 volatile bool emagEnabled = false;
 volatile bool syncPulseRequested = false;
+volatile int64_t nextFrameStartUs = 0;
 
 // Initialize electromagnets
 void initElectromagnets() {
-  if (EMAG_COUNT * (EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS + (2 * EMAG_GAP_TIME_MS)) > EMAG_FRAME_LEN_MS) {
-    Serial.println("WARNING: Electromagnet on-time exceeds frame length! Adjust timing parameters.");
+  if (EMAG_COUNT * (EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS) > EMAG_FRAME_LEN_MS) {
+    DEBUG_PRINTLN("WARNING: Electromagnet on-time exceeds frame length! Adjust timing parameters.");
   }
   
   // Configure all electromagnet pins as outputs, start disabled
-  for (int i = 0; i < NUM_ELECTROMAGNETS; i++) {
+  for (int i = 0; i < EMAG_COUNT; i++) {
     pinMode(EMAG_PINS_A[i], OUTPUT);
     pinMode(EMAG_PINS_B[i], OUTPUT);
     digitalWrite(EMAG_PINS_A[i], LOW);
     digitalWrite(EMAG_PINS_B[i], LOW);
   }
   
-  Serial.println("Electromagnets initialized");
+  DEBUG_PRINTLN("Electromagnets initialized");
 }
 
 bool setElectromagnet(uint8_t emag_i, bool enabled, bool forward) {
-  if (emag_i >= NUM_ELECTROMAGNETS) {
-    Serial.printf("Invalid electromagnet index: %d\n", emag_i);
+  if (emag_i >= EMAG_COUNT) {
+    DEBUG_PRINTF("Invalid electromagnet index: %d\n", emag_i);
     return false;
   }
   
@@ -46,7 +47,7 @@ bool setElectromagnet(uint8_t emag_i, bool enabled, bool forward) {
 
 // Set all electromagnets: disabled=[0,0], forward=[1,0], reverse=[0,1]
 void setAllElectromagnets(bool enabled, bool forward) {
-  for (int i = 0; i < NUM_ELECTROMAGNETS; i++) {
+  for (int i = 0; i < EMAG_COUNT; i++) {
     setElectromagnet(i, enabled, forward);
   }
 }
@@ -57,7 +58,7 @@ void setElectromagnetEnabled(bool enabled) {
   if (!enabled) {
     setAllElectromagnets(false);
   }
-  Serial.printf("Electromagnet cycling %s\n",
+  DEBUG_PRINTF("Electromagnet cycling %s\n",
                 enabled ? "ENABLED" : "DISABLED");
 }
 
@@ -69,7 +70,15 @@ bool getElectromagnetEnabled() {
 // Request a one-shot 3ms sync pulse at the start of the next emag frame
 void triggerSyncPulse() {
   syncPulseRequested = true;
-  Serial.println("Sync pulse requested");
+  DEBUG_PRINTLN("Sync pulse requested");
+}
+
+// Returns microseconds until the start of the next emag frame
+uint32_t getTimeToNextFrameUs() {
+  const int64_t frameLenUs = (int64_t)EMAG_FRAME_LEN_MS * 1000LL;
+  int64_t timeToNext = nextFrameStartUs - esp_timer_get_time();
+  if (timeToNext <= 0) timeToNext += frameLenUs;
+  return (uint32_t)timeToNext;
 }
 
 // Wait until an absolute esp_timer_get_time() target (µs).
@@ -106,30 +115,30 @@ static inline void benchRecord(int s, int64_t frameStartUs) {
 }
 
 static void benchPrintAndReset() {
-  Serial.printf("\n=== Emag timing benchmark (last %d frames) ===\n", BENCH_FRAMES);
+  DEBUG_PRINTF("\n=== Emag timing benchmark (last %d frames) ===\n", BENCH_FRAMES);
   for (int i = 0; i < EMAG_COUNT; i++) {
     int base = i * 4;
-    Serial.printf("  emag%d  fwd ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+0], benchMax[base+0]);
-    Serial.printf("  emag%d  gap1   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+1], benchMax[base+1]);
-    Serial.printf("  emag%d  rev ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+2], benchMax[base+2]);
-    Serial.printf("  emag%d  gap2   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+3], benchMax[base+3]);
+    DEBUG_PRINTF("  emag%d  fwd ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+0], benchMax[base+0]);
+    DEBUG_PRINTF("  emag%d  gap1   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+1], benchMax[base+1]);
+    DEBUG_PRINTF("  emag%d  rev ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+2], benchMax[base+2]);
+    DEBUG_PRINTF("  emag%d  gap2   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+3], benchMax[base+3]);
   }
-  Serial.println("==============================================\n");
+  DEBUG_PRINTLN("==============================================\n");
   benchFrameCount  = 0;
   benchInitialized = false;
 }
 
 // FreeRTOS electromagnet task
 void electromagnetTask(void *parameter) {
-  Serial.println("Electromagnet Task started");
+  DEBUG_PRINTLN("Electromagnet Task started");
 
   const int64_t frameLenUs = (int64_t)EMAG_FRAME_LEN_MS * 1000LL;
-  int64_t nextFrameStartUs = esp_timer_get_time();
+  nextFrameStartUs = esp_timer_get_time();
 
   while (1) {
     nextFrameStartUs += frameLenUs;
     if (!waitUntilUs(nextFrameStartUs)) {
-      Serial.println("Frame skipped: overrun at frame start");
+      DEBUG_PRINTLN("Frame skipped: overrun at frame start");
       continue;
     }
 
@@ -141,17 +150,16 @@ void electromagnetTask(void *parameter) {
       setAllElectromagnets(true, true);  // forward pulse for sync
       waitUntilUs(nextFrameStartUs + 3000LL);
       setAllElectromagnets(false);
-      Serial.println("Sync pulse fired (3ms)");
+      DEBUG_PRINTLN("Sync pulse fired (3ms)");
     }
     else if (emagEnabled) {
       const int64_t fwdOnUs = (int64_t)EMAG_FWD_ON_TIME_MS * 1000LL;
       const int64_t revOnUs = (int64_t)EMAG_REV_ON_TIME_MS * 1000LL;
-      const int64_t gapUs   = (int64_t)EMAG_GAP_TIME_MS    * 1000LL;
 
       int64_t interFrameTimeUs = nextFrameStartUs;
 
       for (int i = 0; i < EMAG_COUNT && emagEnabled; i++) {
-        int base = i * 4;
+        int base = i * 2;
 
         // Forward ON
         benchRecord(base + 0, nextFrameStartUs);
@@ -159,23 +167,14 @@ void electromagnetTask(void *parameter) {
         interFrameTimeUs += fwdOnUs;
         waitUntilUs(interFrameTimeUs);
 
-        // Wait
-        benchRecord(base + 1, nextFrameStartUs);
-        setElectromagnet(i, false);
-        interFrameTimeUs += gapUs;
-        waitUntilUs(interFrameTimeUs);
-
         // Reverse ON
-        benchRecord(base + 2, nextFrameStartUs);
+        benchRecord(base + 1, nextFrameStartUs);
         setElectromagnet(i, true, false);
         interFrameTimeUs += revOnUs;
         waitUntilUs(interFrameTimeUs);
 
-        // Wait
-        benchRecord(base + 3, nextFrameStartUs);
+        // OFF
         setElectromagnet(i, false);
-        interFrameTimeUs += gapUs;
-        waitUntilUs(interFrameTimeUs);
       }
 
       benchInitialized = true;

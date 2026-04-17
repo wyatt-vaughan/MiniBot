@@ -3,6 +3,21 @@
 
 #include "robot.h"
 #include "utils.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+/**
+ * Parameters passed to BatteryMonitor_Task.
+ * Holds the robot instance and handles for all tasks that should be
+ * suspended when the battery condition requires it.
+ */
+typedef struct {
+    Robot* robot;
+    TaskHandle_t kinematics_task;
+    TaskHandle_t communicator_task;
+    TaskHandle_t position_estimator_sensor_task;
+    TaskHandle_t position_estimator_calc_task;
+} BatteryMonitorParams;
 
 /**
  * Battery Monitor Task

@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from comms.protocol import build_poll
+from comms.protocol import build_position_request
 from config import GUI, PIECES
 from models.piece import BoardState
 
@@ -39,7 +39,8 @@ class PositionTrackerTab(QWidget):
     _COL_X       = 3
     _COL_Y       = 4
     _COL_THETA   = 5
-    _COL_UPDATED = 6
+    _COL_BATT    = 6
+    _COL_UPDATED = 7
 
     def __init__(self, board_state: BoardState, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -71,7 +72,9 @@ class PositionTrackerTab(QWidget):
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setStretchLastSection(True)
+        self._table.horizontalHeader().setDefaultSectionSize(60)
         self._table.setSortingEnabled(True)
+        self._table.sortByColumn(self._COL_ID, Qt.SortOrder.AscendingOrder)
         root.addWidget(self._table)
 
     # ------------------------------------------------------------------
@@ -98,6 +101,7 @@ class PositionTrackerTab(QWidget):
             f'{piece.x_mm:.1f}',
             f'{piece.y_mm:.1f}',
             f'{piece.orientation_deg:.1f}',
+            f'{piece.battery_v:.2f}' if piece.battery_v else '',
             updated,
         ]
 
@@ -111,19 +115,21 @@ class PositionTrackerTab(QWidget):
             self._table.setItem(row, col, item)
 
         # Color-code by side
-        from PyQt6.QtGui import QColor
-        bg = QColor('#f8f4ee') if piece.color == 'white' else QColor('#e8e8e8')
+        from PyQt6.QtGui import QColor, QBrush
+        bg   = QColor('#2a2a2a') if piece.color == 'white' else QColor('#323232')
+        text = QColor('#d0d0d0')
         for col in range(self._table.columnCount()):
             item = self._table.item(row, col)
             if item:
-                item.setBackground(bg)
+                item.setBackground(QBrush(bg))
+                item.setForeground(QBrush(text))
 
     # ------------------------------------------------------------------
     # Public slots
     # ------------------------------------------------------------------
 
-    @pyqtSlot(int, float, float, float)
-    def on_position_received(self, piece_id: int, x_mm: float, y_mm: float, theta_deg: float) -> None:
+    @pyqtSlot(int, float, float, float, float)
+    def on_position_received(self, piece_id: int, x_mm: float, y_mm: float, theta_deg: float, battery_v: float) -> None:
         """Update a row when a POS message arrives."""
         row = self._find_row(piece_id)
         if row is not None:
@@ -141,4 +147,4 @@ class PositionTrackerTab(QWidget):
         return None
 
     def _on_poll(self) -> None:
-        self.send_raw.emit(build_poll())
+        self.send_raw.emit(build_position_request(0xFF))

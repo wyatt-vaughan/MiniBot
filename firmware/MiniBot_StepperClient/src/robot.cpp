@@ -102,7 +102,7 @@ bool Robot::initialize() {
 
     left_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     right_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
-    left_wheel.resetDriver();
+    left_wheel.resetDriver();  // only one reset needed, reset pin is shared
     
     wheel_radius_mm = WHEEL_RADIUS_MM;
     wheel_spacing_mm = WHEEL_SPACING_MM;
@@ -130,17 +130,17 @@ bool Robot::initialize() {
     return true;
 }
 
-void Robot::updateTruePosition() {
+void Robot::updateEstimatedPosition() {
     // TODO: Implement odometry calculations based on step counts
     // This will convert stepper motor step counts to X,Y position and orientation
     // Updates true_x, true_y, and true_theta continuously
 }
 
-void Robot::setTruePose(float x, float y, float theta) {
-    if (is_moving) {
-        // Don't update true pose while actively moving, steppers are probably very noisy
-        return;
-    }
+void Robot::setTruePose(float x, float y, float theta, float confidence) {
+    // if (is_moving) {
+    //     // Don't update true pose while actively moving, steppers induce too much noise
+    //     return;
+    // }
 
     uint32_t now_us = micros();
     xSemaphoreTake(true_pose_mutex, portMAX_DELAY);
@@ -159,7 +159,10 @@ void Robot::setTruePose(float x, float y, float theta) {
     true_pose_last_update_us = now_us;
 
     // Compute alpha from cutoff frequency: alpha = 1 - exp(-2*pi*f_c*dt)
-    const float alpha = 1.0f - expf(-2.0f * M_PI * TRUE_POSE_LPF_CUTOFF_HZ * dt_s);
+    // Scale by confidence: high confidence → full response, low → heavier smoothing
+    float conf_scale = fminf(confidence / TRUE_POSE_LPF_REF_CONFIDENCE, 1.0f);
+    if (conf_scale < 0.1f) conf_scale = 0.1f;
+    const float alpha = (1.0f - expf(-2.0f * M_PI * TRUE_POSE_LPF_CUTOFF_HZ * dt_s)) * conf_scale;
     true_x = alpha * x + (1.0f - alpha) * true_x;
     true_y = alpha * y + (1.0f - alpha) * true_y;
 
@@ -170,6 +173,9 @@ void Robot::setTruePose(float x, float y, float theta) {
     true_theta += alpha * delta;
     while (true_theta >  M_PI) true_theta -= 2.0f * M_PI;
     while (true_theta < -M_PI) true_theta += 2.0f * M_PI;
+
+    // TODO for now just using this as truth, eventually be smarter about when to use dead reckoning vs sensed
+    updatePositionFromTruePose();
 
     xSemaphoreGive(true_pose_mutex);
 }
@@ -195,7 +201,7 @@ bool Robot::getTruePose(float* x, float* y, float* orientation) {
     return true;
 }
 
-void Robot::updatePositionFromEstimate() {
+void Robot::updatePositionFromTruePose() {
     positionX = true_x;
     positionY = true_y;
     orientation = true_theta;
@@ -1001,6 +1007,16 @@ void Robot::updateMotorTest(uint32_t dt_us) {
 
 void Robot::setBatteryVoltage(float voltage) {
     battery_voltage = voltage;
+}
+
+void Robot::disableMotors() {
+    left_wheel.disable();
+    right_wheel.disable();
+}
+
+void Robot::enableMotors() {
+    left_wheel.enable();
+    right_wheel.enable();
 }
 
 void Robot::setStatus(uint8_t status) {

@@ -28,7 +28,7 @@ void initLEDStatus() {
   ledsOff();
 
   ledEventQueue = xQueueCreate(8, sizeof(LedEvent));
-  Serial.println("LED Status initialized");
+  DEBUG_PRINTLN("LED Status initialized");
 }
 
 void ledPostEvent(LedEventType type, LedColor color,
@@ -44,7 +44,7 @@ void ledPostEvent(LedEventType type, LedColor color,
 }
 
 void ledStatusTask(void *parameter) {
-  Serial.println("LED Status Task started");
+  DEBUG_PRINTLN("LED Status Task started");
 
   // Default idle heartbeat: 100ms on, 900ms off, indefinite
   LedEvent current = {

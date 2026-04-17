@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QTextEdit, QVBoxLayout, QWidget,
 )
 
-from comms.protocol import build_move
+from comms.protocol import build_position_command
 from config import COMM, PIECES, PLANNING, SIMULATOR
 
 
@@ -27,12 +27,14 @@ class DebugTab(QWidget):
     """Debug messaging control panel tab.
 
     Signals:
-        send_raw(bytes)              — emit bytes to the serial handler
-        simulator_mode_changed(bool) — True when simulator mode is toggled on
+        send_raw(bytes)                  — emit bytes to the serial handler
+        simulator_mode_changed(bool)     — True when simulator mode is toggled on
+        hide_stale_pieces_changed(bool)  — True to hide pieces with no recent position
     """
 
-    send_raw               = pyqtSignal(bytes)
-    simulator_mode_changed = pyqtSignal(bool)   # True = simulator active
+    send_raw                  = pyqtSignal(bytes)
+    simulator_mode_changed    = pyqtSignal(bool)   # True = simulator active
+    hide_stale_pieces_changed = pyqtSignal(bool)   # True = hide pieces unseen >5s
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -129,6 +131,15 @@ class DebugTab(QWidget):
 
         root.addWidget(sim_group)
 
+        # --- Display options ---
+        disp_group = QGroupBox('Display')
+        dl = QVBoxLayout(disp_group)
+        self._hide_stale_check = QCheckBox('Hide pieces with no recent position (>5 s)')
+        self._hide_stale_check.setChecked(False)
+        self._hide_stale_check.toggled.connect(self.hide_stale_pieces_changed)
+        dl.addWidget(self._hide_stale_check)
+        root.addWidget(disp_group)
+
         # --- Response log ---
         log_group = QGroupBox('Response Log')
         ll = QVBoxLayout(log_group)
@@ -180,7 +191,7 @@ class DebugTab(QWidget):
         theta_deg   = self._theta_spin.value()
         duration_ms = int(self._dur_spin.value() * 1000)
 
-        data = build_move(piece_id, x_mm, y_mm, theta_deg, duration_ms)
+        data = build_position_command(piece_id, x_mm, y_mm, theta_deg, duration_ms)
         self._log.append(f'→ {data.decode(COMM.ENCODING).strip()}')
         self.send_raw.emit(data)
 

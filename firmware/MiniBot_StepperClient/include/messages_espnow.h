@@ -12,6 +12,7 @@ typedef enum {
   MSG_TYPE_MAG_REQUEST = 5,
   MSG_TYPE_MAG_FIELD_RESPONSE = 6,
   MSG_TYPE_POS_SYNC_COMMAND = 7,
+  MSG_TYPE_POS_SYNC = 8,
 } EspNowMessageType;
 
 typedef enum {
@@ -24,7 +25,7 @@ typedef enum {
   ERR_SYNC_TIMEOUT = 6
 } EspNowErrorType;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t targetID;
   uint8_t msg_type;
   bool enabled;
@@ -32,7 +33,7 @@ typedef struct {
   int8_t m1_vel;
 } MotTestCommand;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t targetID;
   uint8_t msg_type;
   uint32_t timestamp;
@@ -42,20 +43,27 @@ typedef struct {
   float move_duration_ms;
 } PositionCommand;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t targetID;
   uint8_t msg_type;
   uint32_t timestamp;
 } PositionRequest;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t targetID;
   uint8_t msg_type;
   uint32_t timestamp;
   uint16_t timeout_ms;
 } PosSyncCommand;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
+  uint8_t targetID;
+  uint8_t msg_type;
+  uint32_t timestamp;
+  uint32_t next_frame_us;
+} PosSync;
+
+typedef struct __attribute__((packed)) {
   uint8_t responderID;
   uint8_t msg_type;
   uint32_t timestamp;
@@ -65,20 +73,20 @@ typedef struct {
   float battery_voltage;
 } AckMessage;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t responderID;
   uint8_t msg_type;
   uint32_t timestamp;
   uint8_t err_type;
 } NackMessage;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t targetID;
   uint8_t msg_type;
   uint32_t timestamp;
 } MagneticFieldRequest;
 
-typedef struct {
+typedef struct __attribute__((packed)) {
   uint8_t responderID;
   uint8_t msg_type;
   uint32_t timestamp;

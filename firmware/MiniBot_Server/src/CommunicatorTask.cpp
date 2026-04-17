@@ -18,35 +18,35 @@ static QueueHandle_t magFieldQueue = NULL;
 // ESP-NOW callback when data is sent
 void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   Serial.print("Broadcast Send Status: ");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+  DEBUG_PRINTLN(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
 }
 
 // ESP-NOW callback when data is received
 void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
-  Serial.printf("ESP-NOW data received: %d bytes\n", len);
+  DEBUG_PRINTF("ESP-NOW data received: %d bytes\n", len);
   
   // Try to handle as AckMessage first
   if (len == sizeof(AckMessage)) {
     AckMessage ack;
     memcpy(&ack, incomingData, sizeof(ack));
     
-    Serial.printf("Received message - Type: %d, ResponderID: 0x%02X\n", ack.msg_type, ack.responderID);
+    DEBUG_PRINTF("Received message - Type: %d, ResponderID: 0x%02X\n", ack.msg_type, ack.responderID);
     
     // Check if it's an ACK message
     if (ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
-      Serial.printf("ACK message detected from robot 0x%02X\n", ack.responderID);
-      Serial.printf("  Position: (%.2f, %.2f) Angle: %.3f rad\n", ack.x, ack.y, ack.orientation_rad);
-      Serial.printf("  Timestamp: %u Battery: %.2fV\n", ack.timestamp, ack.battery_voltage);
+      DEBUG_PRINTF("ACK message detected from robot 0x%02X\n", ack.responderID);
+      DEBUG_PRINTF("  Position: (%.2f, %.2f) Angle: %.3f rad\n", ack.x, ack.y, ack.orientation_rad);
+      DEBUG_PRINTF("  Timestamp: %u Battery: %.2fV\n", ack.timestamp, ack.battery_voltage);
       
       // Send to ACK queue for timeout handling
       if (ackQueue != NULL) {
         if (xQueueSend(ackQueue, &ack, 0) == pdPASS) {
-          Serial.println("  -> Sent to ACK queue");
+          DEBUG_PRINTLN("  -> Sent to ACK queue");
         } else {
-          Serial.println("  -> ACK queue full!");
+          DEBUG_PRINTLN("  -> ACK queue full!");
         }
       } else {
-        Serial.println("  -> ACK queue is NULL!");
+        DEBUG_PRINTLN("  -> ACK queue is NULL!");
       }
       
       // Also send to all status queues for GUI/Python/I2C update
@@ -61,7 +61,7 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
       status.magnetFieldValid = false;
       
       broadcastStatus(status);
-      Serial.println("  -> Broadcast to all status queues");
+      DEBUG_PRINTLN("  -> Broadcast to all status queues");
       return;
     }
   }
@@ -71,22 +71,22 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
     MagneticFieldResponse magField;
     memcpy(&magField, incomingData, sizeof(magField));
     
-    Serial.printf("Received message - Type: %d, ResponderID: 0x%02X\n", magField.msg_type, magField.responderID);
+    DEBUG_PRINTF("Received message - Type: %d, ResponderID: 0x%02X\n", magField.msg_type, magField.responderID);
     
     if (magField.msg_type == MSG_TYPE_MAG_REQUEST) {
-      Serial.printf("Magnetic field response detected from robot 0x%02X\n", magField.responderID);
-      Serial.printf("  Field: [%.2f, %.2f, %.2f] gauss\n", magField.field_x_gauss, magField.field_y_gauss, magField.field_z_gauss);
-      Serial.printf("  Timestamp: %u\n", magField.timestamp);
+      DEBUG_PRINTF("Magnetic field response detected from robot 0x%02X\n", magField.responderID);
+      DEBUG_PRINTF("  Field: [%.2f, %.2f, %.2f] gauss\n", magField.field_x_gauss, magField.field_y_gauss, magField.field_z_gauss);
+      DEBUG_PRINTF("  Timestamp: %u\n", magField.timestamp);
       
       // Send to magField queue for timeout handling
       if (magFieldQueue != NULL) {
         if (xQueueSend(magFieldQueue, &magField, 0) == pdPASS) {
-          Serial.println("  -> Sent to magField queue");
+          DEBUG_PRINTLN("  -> Sent to magField queue");
         } else {
-          Serial.println("  -> magField queue full!");
+          DEBUG_PRINTLN("  -> magField queue full!");
         }
       } else {
-        Serial.println("  -> magField queue is NULL!");
+        DEBUG_PRINTLN("  -> magField queue is NULL!");
       }
       return;
     }
@@ -97,17 +97,17 @@ void onDataRecv(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
     NackMessage nack;
     memcpy(&nack, incomingData, sizeof(nack));
     if (nack.msg_type == MSG_TYPE_NACK_MESSAGE) {
-      Serial.printf("NACK received from robot 0x%02X, err_type=%d\n", nack.responderID, nack.err_type);
+      DEBUG_PRINTF("NACK received from robot 0x%02X, err_type=%d\n", nack.responderID, nack.err_type);
       if (nackQueue != NULL) {
         if (xQueueSend(nackQueue, &nack, 0) != pdPASS) {
-          Serial.println("  -> NACK queue full!");
+          DEBUG_PRINTLN("  -> NACK queue full!");
         }
       }
       return;
     }
   }
 
-  Serial.printf("Warning: Unhandled message type or size mismatch (len=%d, AckMsg=%d, NackMsg=%d, MagField=%d)\n",
+  DEBUG_PRINTF("Warning: Unhandled message type or size mismatch (len=%d, AckMsg=%d, NackMsg=%d, MagField=%d)\n",
                len, sizeof(AckMessage), sizeof(NackMessage), sizeof(MagneticFieldResponse));
 }
 
@@ -120,11 +120,11 @@ void initESPNow() {
   
   // Initialize ESP-NOW
   if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW initialization failed");
+    DEBUG_PRINTLN("ESP-NOW initialization failed");
     return;
   }
   
-  Serial.println("ESP-NOW initialized");
+  DEBUG_PRINTLN("ESP-NOW initialized");
   
   // Register callbacks
   esp_now_register_send_cb(onDataSent);
@@ -137,35 +137,34 @@ void initESPNow() {
   peerInfo.encrypt = false;
   
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-    Serial.println("Failed to add peer");
+    DEBUG_PRINTLN("Failed to add peer");
   } else {
-    Serial.println("Broadcast peer added successfully");
+    DEBUG_PRINTLN("Broadcast peer added successfully");
   }
 }
 
 // FreeRTOS Communicator Task
 void communicatorTask(void *parameter) {
-  Serial.println("Communicator Task started");
+  DEBUG_PRINTLN("Communicator Task started");
   
   CommandMessage msg;
   
   while (1) {
     // Check for commands from GUI or Joystick
     if (xQueueReceive(commandQueue, &msg, pdMS_TO_TICKS(10)) == pdPASS) {
-      
       if (msg.commandType == CMD_TYPE_MOT_TEST) {
         // Handle MotTestCommand (from Joystick or other sources)
         MotTestCommand *motCmd = &msg.data.motCmd;
-        Serial.printf("Sending MotTestCommand to 0x%02X: M0=%d, M1=%d\n", 
+        DEBUG_PRINTF("Sending MotTestCommand to 0x%02X: M0=%d, M1=%d\n", 
                      motCmd->targetID, motCmd->m0_vel, motCmd->m1_vel);
         
         // Send broadcast
         esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)motCmd, sizeof(MotTestCommand));
         
         if (result == ESP_OK) {
-          Serial.println("MotTestCommand broadcast sent");
+          DEBUG_PRINTLN("MotTestCommand broadcast sent");
         } else {
-          Serial.printf("MotTestCommand send failed: %d\n", result);
+          DEBUG_PRINTF("MotTestCommand send failed: %d\n", result);
         }
       } else if (msg.commandType == CMD_TYPE_GUI) {
         // Handle GUICommand (from GUI)
@@ -178,7 +177,7 @@ void communicatorTask(void *parameter) {
           req.msg_type = MSG_TYPE_POSITION_REQUEST;
           req.timestamp = millis();
           
-          Serial.printf("Sending position request to robot 0x%02X\n", cmd->targetID);
+          DEBUG_PRINTF("Sending position request to robot 0x%02X\n", cmd->targetID);
           
           // Clear any pending ACKs for this target
           AckMessage tempAck;
@@ -190,39 +189,58 @@ void communicatorTask(void *parameter) {
           esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&req, sizeof(req));
           
           if (result == ESP_OK) {
-            Serial.println("Position request broadcast sent");
-            
-            // Wait for ACK with 500ms timeout
+            DEBUG_PRINTLN("Position request broadcast sent");
+
             AckMessage ack;
-            bool ackReceived = false;
             uint32_t startTime = millis();
-            
-            while ((millis() - startTime) < 500) {
-              if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
-                if (ack.responderID == cmd->targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
-                  ackReceived = true;
-                  Serial.printf("ACK received from robot 0x%02X\n", cmd->targetID);
-                  break;
+
+            if (cmd->targetID == 0xFF) {
+              // Broadcast request: collect all responses during the full window
+              while ((millis() - startTime) < 500) {
+                if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
+                  if (ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+                    DEBUG_PRINTF("ACK received from robot 0x%02X (broadcast req)\n", ack.responderID);
+                    GUIStatus status;
+                    status.targetID = ack.responderID;
+                    status.ackReceived = true;
+                    status.currentX = ack.x;
+                    status.currentY = ack.y;
+                    status.currentAngle = ack.orientation_rad;
+                    status.timestamp = ack.timestamp;
+                    status.batteryVoltage = ack.battery_voltage;
+                    status.magnetFieldValid = false;
+                    broadcastStatus(status);
+                  }
                 }
               }
+            } else {
+              // Unicast request: wait for the specific robot's ACK
+              bool ackReceived = false;
+              while ((millis() - startTime) < 500) {
+                if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
+                  if (ack.responderID == cmd->targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+                    ackReceived = true;
+                    DEBUG_PRINTF("ACK received from robot 0x%02X\n", cmd->targetID);
+                    break;
+                  }
+                }
+              }
+              if (!ackReceived) {
+                DEBUG_PRINTF("No ACK received from robot 0x%02X (timeout)\n", cmd->targetID);
+                GUIStatus status;
+                status.targetID = cmd->targetID;
+                status.ackReceived = false;
+                status.currentX = 0;
+                status.currentY = 0;
+                status.currentAngle = 0;
+                status.timestamp = 0;
+                status.batteryVoltage = 0;
+                status.magnetFieldValid = false;
+                broadcastStatus(status);
+              }
             }
-            
-            if (!ackReceived) {
-              Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd->targetID);
-              // Send timeout notification to all tasks
-              GUIStatus status;
-              status.targetID = cmd->targetID;
-              status.ackReceived = false;
-              status.currentX = 0;
-              status.currentY = 0;
-              status.currentAngle = 0;
-            status.timestamp = 0;
-            status.batteryVoltage = 0;
-            status.magnetFieldValid = false;
-            broadcastStatus(status);
-          }
         } else {
-          Serial.printf("Error sending position request: %d\n", result);
+          DEBUG_PRINTF("Error sending position request: %d\n", result);
         }
         
       } else if (cmd->requestType == 2) {
@@ -232,7 +250,7 @@ void communicatorTask(void *parameter) {
         magReq.msg_type = MSG_TYPE_MAG_REQUEST;
         magReq.timestamp = millis();
         
-        Serial.printf("Sending magnetic field request to robot 0x%02X\n", cmd->targetID);
+        DEBUG_PRINTF("Sending magnetic field request to robot 0x%02X\n", cmd->targetID);
         
         // Clear any pending magField responses for this target
         MagneticFieldResponse tempMag;
@@ -244,54 +262,74 @@ void communicatorTask(void *parameter) {
         esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&magReq, sizeof(magReq));
         
         if (result == ESP_OK) {
-          Serial.println("Magnetic field request broadcast sent");
-          
-          // Wait for response with 500ms timeout
+          DEBUG_PRINTLN("Magnetic field request broadcast sent");
+
           MagneticFieldResponse magResp;
-          bool respReceived = false;
           uint32_t startTime = millis();
-          
-          while ((millis() - startTime) < 500) {
-            if (xQueueReceive(magFieldQueue, &magResp, pdMS_TO_TICKS(10)) == pdPASS) {
-              if (magResp.responderID == cmd->targetID && magResp.msg_type == MSG_TYPE_MAG_REQUEST) {
-                respReceived = true;
-                Serial.printf("Magnetic field response received from robot 0x%02X\n", cmd->targetID);
-                
-                // Update status with magnet field values (don't overwrite battery voltage)
-                GUIStatus status;
-                status.targetID = cmd->targetID;
-                status.ackReceived = true;
-                status.currentX = 0;
-                status.currentY = 0;
-                status.currentAngle = 0;
-                status.timestamp = magResp.timestamp;
-                status.batteryVoltage = -1.0f;  // Use sentinel value to indicate "don't update"
-                status.magnetX_gauss = magResp.field_x_gauss;
-                status.magnetY_gauss = magResp.field_y_gauss;
-                status.magnetZ_gauss = magResp.field_z_gauss;
-                status.magnetFieldValid = true;
-                broadcastStatus(status);
-                break;
+
+          if (cmd->targetID == 0xFF) {
+            // Broadcast request: collect all responses during the full window
+            while ((millis() - startTime) < 500) {
+              if (xQueueReceive(magFieldQueue, &magResp, pdMS_TO_TICKS(10)) == pdPASS) {
+                if (magResp.msg_type == MSG_TYPE_MAG_FIELD_RESPONSE) {
+                  DEBUG_PRINTF("Magnetic field response from robot 0x%02X (broadcast req)\n", magResp.responderID);
+                  GUIStatus status;
+                  status.targetID = magResp.responderID;
+                  status.ackReceived = true;
+                  status.currentX = 0;
+                  status.currentY = 0;
+                  status.currentAngle = 0;
+                  status.timestamp = magResp.timestamp;
+                  status.batteryVoltage = -1.0f;
+                  status.magnetX_gauss = magResp.field_x_gauss;
+                  status.magnetY_gauss = magResp.field_y_gauss;
+                  status.magnetZ_gauss = magResp.field_z_gauss;
+                  status.magnetFieldValid = true;
+                  broadcastStatus(status);
+                }
               }
             }
-          }
-          
-          if (!respReceived) {
-            Serial.printf("No magnetic field response from robot 0x%02X (timeout)\n", cmd->targetID);
-            // Send timeout notification
-            GUIStatus status;
-            status.targetID = cmd->targetID;
-            status.ackReceived = false;
-            status.currentX = 0;
-            status.currentY = 0;
-            status.currentAngle = 0;
-            status.timestamp = 0;
-            status.batteryVoltage = 0;
-            status.magnetFieldValid = false;
-            broadcastStatus(status);
+          } else {
+            // Unicast request: wait for the specific robot's response
+            bool respReceived = false;
+            while ((millis() - startTime) < 500) {
+              if (xQueueReceive(magFieldQueue, &magResp, pdMS_TO_TICKS(10)) == pdPASS) {
+                if (magResp.responderID == cmd->targetID && magResp.msg_type == MSG_TYPE_MAG_FIELD_RESPONSE) {
+                  respReceived = true;
+                  DEBUG_PRINTF("Magnetic field response received from robot 0x%02X\n", cmd->targetID);
+                  GUIStatus status;
+                  status.targetID = cmd->targetID;
+                  status.ackReceived = true;
+                  status.currentX = 0;
+                  status.currentY = 0;
+                  status.currentAngle = 0;
+                  status.timestamp = magResp.timestamp;
+                  status.batteryVoltage = -1.0f;
+                  status.magnetX_gauss = magResp.field_x_gauss;
+                  status.magnetY_gauss = magResp.field_y_gauss;
+                  status.magnetZ_gauss = magResp.field_z_gauss;
+                  status.magnetFieldValid = true;
+                  broadcastStatus(status);
+                  break;
+                }
+              }
+            }
+            if (!respReceived) {
+              DEBUG_PRINTF("No magnetic field response from robot 0x%02X (timeout)\n", cmd->targetID);
+              GUIStatus status;
+              status.targetID = cmd->targetID;
+              status.ackReceived = false;
+              status.currentX = 0;
+              status.currentY = 0;
+              status.currentAngle = 0;
+              status.timestamp = 0;
+              status.batteryVoltage = 0;
+              status.magnetFieldValid = false;
+              broadcastStatus(status);
+            }
           }
         } else {
-          Serial.printf("Error sending magnetic field request: %d\n", result);
+          DEBUG_PRINTF("Error sending magnetic field request: %d\n", result);
         }
         
       } else {
@@ -305,7 +343,7 @@ void communicatorTask(void *parameter) {
         posCmd.target_a_rad = cmd->angle;
         posCmd.move_duration_ms = cmd->duration;
         
-        Serial.printf("Sending position command to robot 0x%02X: (%.2f, %.2f) %.2frad %.2fms\n",
+        DEBUG_PRINTF("Sending position command to robot 0x%02X: (%.2f, %.2f) %.2frad %.2fms\n",
                      cmd->targetID, cmd->x, cmd->y, cmd->angle, cmd->duration);
         
         // Clear any pending ACKs for this target
@@ -318,7 +356,7 @@ void communicatorTask(void *parameter) {
         esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&posCmd, sizeof(posCmd));
         
         if (result == ESP_OK) {
-          Serial.println("Position command broadcast sent");
+          DEBUG_PRINTLN("Position command broadcast sent");
           
           // Wait for ACK with 500ms timeout
           AckMessage ack;
@@ -329,14 +367,14 @@ void communicatorTask(void *parameter) {
             if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(10)) == pdPASS) {
               if (ack.responderID == cmd->targetID && ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
                 ackReceived = true;
-                Serial.printf("ACK received from robot 0x%02X\n", cmd->targetID);
+                DEBUG_PRINTF("ACK received from robot 0x%02X\n", cmd->targetID);
                 break;
               }
             }
           }
           
           if (!ackReceived) {
-            Serial.printf("No ACK received from robot 0x%02X (timeout)\n", cmd->targetID);
+            DEBUG_PRINTF("No ACK received from robot 0x%02X (timeout)\n", cmd->targetID);
             // Send timeout notification to all tasks
             GUIStatus status;
             status.targetID = cmd->targetID;
@@ -350,18 +388,21 @@ void communicatorTask(void *parameter) {
             broadcastStatus(status);
           }
         } else {
-          Serial.printf("Error sending position command: %d\n", result);
+          DEBUG_PRINTF("Error sending position command: %d\n", result);
         }
         }  // End of GUI command handling
       } else if (msg.commandType == CMD_TYPE_POS_SYNC) {
+        // Wait until start of next emag frame
+        vTaskDelay(pdMS_TO_TICKS(getTimeToNextFrameUs() / 1000));
+
         // Broadcast PosSyncCommand to all units
         PosSyncCommand syncCmd;
         syncCmd.targetID = 0xFF;
         syncCmd.msg_type = MSG_TYPE_POS_SYNC_COMMAND;
         syncCmd.timestamp = (uint32_t)esp_timer_get_time();
-        syncCmd.timeout_ms = 2 * EMAG_FRAME_LEN_MS;
+        syncCmd.timeout_ms = (POS_SYNC_INITIAL_DELAY_MS + (POS_SYNC_BURST_COUNT + 1) * POS_SYNC_BURST_INTERVAL_MS + EMAG_FRAME_LEN_MS);
 
-        Serial.printf("Sending PosSyncCommand to all units (timeout=%dms)\n", syncCmd.timeout_ms);
+        DEBUG_PRINTF("Sending PosSyncCommand to all units (timeout=%dms)\n", syncCmd.timeout_ms);
 
         // Clear any stale ACKs and NACKs from previous transactions
         AckMessage tempAck;
@@ -370,44 +411,58 @@ void communicatorTask(void *parameter) {
         while (xQueueReceive(nackQueue, &tempNack, 0) == pdPASS) {}
 
         esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&syncCmd, sizeof(syncCmd));
-        if (result == ESP_OK) {
-          Serial.println("PosSyncCommand broadcast sent");
+        if (result != ESP_OK) {
+          DEBUG_PRINTF("PosSyncCommand send failed: %d\n", result);
+          break;
+        }
 
-          // Trigger local sync pulse after waiting 20ms to ensure command delivery
-          vTaskDelay(pdMS_TO_TICKS(20));
-          triggerSyncPulse();
+        DEBUG_PRINTLN("PosSyncCommand broadcast sent");
 
-          // Collect ACK/NACK responses for 5 * EMAG_FRAME_LEN_MS
-          uint32_t collectStart = millis();
-          while ((millis() - collectStart) < (5 * EMAG_FRAME_LEN_MS)) {
-            AckMessage ack;
-            if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(5)) == pdPASS) {
-              if (ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
-                Serial.printf("Sync ACK from robot 0x%02X\n", ack.responderID);
-                GUIStatus syncStatus = {};
-                syncStatus.targetID = ack.responderID;
-                syncStatus.ackReceived = true;
-                syncStatus.batteryVoltage = -1.0f;
-                syncStatus.syncStatus = 1;
-                broadcastStatus(syncStatus);
-              }
-            }
-            NackMessage nack;
-            if (xQueueReceive(nackQueue, &nack, 0) == pdPASS) {
-              if (nack.msg_type == MSG_TYPE_NACK_MESSAGE) {
-                Serial.printf("Sync NACK from robot 0x%02X (err=%d)\n", nack.responderID, nack.err_type);
-                GUIStatus syncStatus = {};
-                syncStatus.targetID = nack.responderID;
-                syncStatus.ackReceived = false;
-                syncStatus.batteryVoltage = -1.0f;
-                syncStatus.syncStatus = 2;
-                broadcastStatus(syncStatus);
-              }
+        // Send a burst of sync pulses to combat Wi-Fi latency
+        vTaskDelay(pdMS_TO_TICKS(POS_SYNC_INITIAL_DELAY_MS));
+        PosSync syncPulse;
+        syncPulse.targetID = 0xFF;
+        syncPulse.msg_type = MSG_TYPE_POS_SYNC;
+        for (int i = 0; i < POS_SYNC_BURST_COUNT; i++) {
+          syncPulse.timestamp = (uint32_t)esp_timer_get_time();
+          syncPulse.next_frame_us = getTimeToNextFrameUs();
+          result = esp_now_send(broadcastAddress, (uint8_t*)&syncPulse, sizeof(syncPulse));
+          if (result != ESP_OK) {
+            DEBUG_PRINTF("Error sending PosSync pulse %d: %d\n", i, result);
+          }
+          if (i < POS_SYNC_BURST_COUNT - 1) {
+            vTaskDelay(pdMS_TO_TICKS(POS_SYNC_BURST_INTERVAL_MS));
+          }
+        }
+
+        // Collect ACK/NACK responses for 5 * EMAG_FRAME_LEN_MS
+        uint32_t collectStart = millis();
+        while ((millis() - collectStart) < (5 * EMAG_FRAME_LEN_MS)) {
+          AckMessage ack;
+          if (xQueueReceive(ackQueue, &ack, pdMS_TO_TICKS(5)) == pdPASS) {
+            if (ack.msg_type == MSG_TYPE_ACK_MESSAGE) {
+              DEBUG_PRINTF("Sync ACK from robot 0x%02X\n", ack.responderID);
+              GUIStatus syncStatus = {};
+              syncStatus.targetID = ack.responderID;
+              syncStatus.ackReceived = true;
+              syncStatus.batteryVoltage = -1.0f;
+              syncStatus.syncStatus = 1;
+              broadcastStatus(syncStatus);
             }
           }
-          Serial.println("Sync response collection window closed");
-        } else {
-          Serial.printf("PosSyncCommand send failed: %d\n", result);
+          NackMessage nack;
+          if (xQueueReceive(nackQueue, &nack, 0) == pdPASS) {
+            if (nack.msg_type == MSG_TYPE_NACK_MESSAGE) {
+              DEBUG_PRINTF("Sync NACK from robot 0x%02X (err=%d)\n", nack.responderID, nack.err_type);
+              GUIStatus syncStatus = {};
+              syncStatus.targetID = nack.responderID;
+              syncStatus.ackReceived = false;
+              syncStatus.batteryVoltage = -1.0f;
+              syncStatus.syncStatus = 2;
+              broadcastStatus(syncStatus);
+            }
+          }
+        DEBUG_PRINTLN("Sync response collection window closed");
         }
       }  // End of command type check
     }

@@ -1,6 +1,7 @@
 #include "kinematics_controller.h"
 #include "esp_now_communicator.h"
 #include "motor_test_queue.h"
+#include "config.h"
 #include <Arduino.h>
 
 static MotionQueue kinematics_queue = NULL;
@@ -34,38 +35,30 @@ void KinematicsController_Task(void* pvParameters) {
     MotorTestRequest motor_test_buffer;
 
     // debug cmds
-    // MotionCommand cmd0 = {
-    //             100.0f,
-    //             0.0f,
-    //             0.0f,
-    //             1500.0f
-    // };
-    // MotionCommand cmd1 = {
-    //             100.0f,
-    //             0.0f,
-    //             1.57f,
-    //             1000.0f
-    // };
-    // MotionCommand cmd2 = {
-    //             0.0f,
-    //             0.0f,
-    //             -1.57f,
-    //             1500.0f
-    // };
-    // MotionCommand cmd3 = {
-    //             0.0f,
-    //             0.0f,
-    //             0.0f,
-    //             1000.0f
-    // };
-    // // debug loop
+    MotionCommand cmd0 = {175.0f, 175.0f, 0.0f,   700.0f};
+    MotionCommand cmd1 = {225.0f, 175.0f, 0.0f,   1000.0f};
+    MotionCommand cmd2 = {225.0f, 175.0f, 1.571f, 700.0f};
+    MotionCommand cmd3 = {225.0f, 225.0f, 1.571f, 1000.0f};
+    MotionCommand cmd4 = {225.0f, 225.0f, 0.0f,   700.0f};
+    MotionCommand cmd5 = {175.0f, 225.0f, 0.0f,   1000.0f};
+    MotionCommand cmd6 = {175.0f, 225.0f, 1.571f, 700.0f};
+    MotionCommand cmd7 = {175.0f, 175.0f, 1.571f, 1000.0f};
+
+    // debug loop
     // vTaskDelay(pdMS_TO_TICKS(3000));
     // while (1) {
     //     robot->setTargetPose(cmd0);
+    //     vTaskDelay(pdMS_TO_TICKS(3000));
     //     robot->setTargetPose(cmd1);
     //     robot->setTargetPose(cmd2);
+    //     vTaskDelay(pdMS_TO_TICKS(3000));
     //     robot->setTargetPose(cmd3);
-    //     vTaskDelay(pdMS_TO_TICKS(8000));
+    //     robot->setTargetPose(cmd4);
+    //     vTaskDelay(pdMS_TO_TICKS(3000));
+    //     robot->setTargetPose(cmd5);
+    //     robot->setTargetPose(cmd6);
+    //     vTaskDelay(pdMS_TO_TICKS(3000));
+    //     robot->setTargetPose(cmd7);
     // }
     
 

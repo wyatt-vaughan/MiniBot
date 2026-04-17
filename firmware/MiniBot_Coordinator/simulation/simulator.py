@@ -45,7 +45,7 @@ class MotionSimulator(QObject):
         All calls to queue_moves() must also be on the GUI thread.
     """
 
-    position_updated = pyqtSignal(int, float, float, float)  # id, x, y, theta
+    position_updated = pyqtSignal(int, float, float, float, float)  # id, x, y, theta, battery_v(0)
     move_complete    = pyqtSignal(int)                        # id
     log_message      = pyqtSignal(str)
 
@@ -59,6 +59,9 @@ class MotionSimulator(QObject):
         self._board  = board_state
         self._speed  = speed_mm_s
         self._active: Dict[int, MoveCommand] = {}  # piece_id → command
+        # Two-phase motion: 'rotate' then 'translate'
+        self._phase: Dict[int, str] = {}        # piece_id → 'rotate' | 'translate'
+        self._rotate_to: Dict[int, float] = {} # piece_id → chosen heading (deg)
 
         self._timer = QTimer(self)
         self._timer.setInterval(SIMULATOR.UPDATE_INTERVAL_MS)
@@ -93,12 +96,16 @@ class MotionSimulator(QObject):
         """
         for cmd in commands:
             self._active[cmd.piece_id] = cmd
+            self._phase[cmd.piece_id] = 'rotate'
+            self._rotate_to.pop(cmd.piece_id, None)  # recompute on first tick
         if self._active and not self._timer.isActive():
             self._timer.start()
 
     def stop_all(self) -> None:
         """Cancel all active moves and stop the timer."""
         self._active.clear()
+        self._phase.clear()
+        self._rotate_to.clear()
         self._timer.stop()
 
     @property
@@ -129,49 +136,53 @@ class MotionSimulator(QObject):
                 arrived_ids.append(pid)
                 continue
 
-            cur_x, cur_y   = piece.x_mm, piece.y_mm
-            dx              = cmd.target_x_mm - cur_x
-            dy              = cmd.target_y_mm - cur_y
-            dist            = math.hypot(dx, dy)
-            at_position     = dist <= step
+            cur_x, cur_y = piece.x_mm, piece.y_mm
+            dx           = cmd.target_x_mm - cur_x
+            dy           = cmd.target_y_mm - cur_y
+            dist         = math.hypot(dx, dy)
 
-            # ── Heading logic (differential drive) ───────────────────────
-            # travel_theta: direction the robot must face to move toward target.
-            # final_theta:  desired orientation once at the target position.
-            if dist > 1.0:
-                travel_theta = (90.0 - math.degrees(math.atan2(dy, dx))) % 360.0
-            else:
-                travel_theta = piece.orientation_deg  # don't spin if basically there
+            # Default: hold position and orientation
+            new_x, new_y = cur_x, cur_y
+            new_theta    = piece.orientation_deg
 
-            final_theta = (cmd.target_theta % 360.0) if cmd.target_theta is not None \
-                          else travel_theta
+            phase = self._phase.get(pid, 'rotate')
 
-            # While still travelling → rotate to face target.
-            # Once at position → rotate to final_theta.
-            rot_target     = final_theta if at_position else travel_theta
-            heading_diff   = (rot_target - piece.orientation_deg + 180.0) % 360.0 - 180.0
+            # ── Phase 1: Rotate to face target (forward or backward) ─────
+            if phase == 'rotate':
+                # Lazily compute the rotation target on the first tick.
+                if pid not in self._rotate_to:
+                    if dist > 1.0:
+                        fwd = math.degrees(math.atan2(dy, dx)) % 360.0
+                        bwd = (fwd + 180.0) % 360.0
+                        diff_fwd = abs((fwd - piece.orientation_deg + 180.0) % 360.0 - 180.0)
+                        diff_bwd = abs((bwd - piece.orientation_deg + 180.0) % 360.0 - 180.0)
+                        self._rotate_to[pid] = fwd if diff_fwd <= diff_bwd else bwd
+                    else:
+                        # Already essentially at target; no rotation needed.
+                        self._rotate_to[pid] = piece.orientation_deg
 
-            if abs(heading_diff) <= rot_step:
-                new_theta = rot_target
-            else:
-                new_theta = (piece.orientation_deg + math.copysign(rot_step, heading_diff)) % 360.0
+                rotate_target = self._rotate_to[pid]
+                heading_diff  = (rotate_target - piece.orientation_deg + 180.0) % 360.0 - 180.0
 
-            # ── Translation (only once heading is sufficiently aligned) ──
-            # Check against travel_theta (not rot_target) so in-place final
-            # rotation after arrival doesn't mistakenly move the piece.
-            travel_diff = (travel_theta - piece.orientation_deg + 180.0) % 360.0 - 180.0
-            heading_ok  = abs(travel_diff) <= SIMULATOR.HEADING_TOLERANCE_DEG
+                if abs(heading_diff) <= rot_step:
+                    # Snap to target heading and advance to translate phase.
+                    new_theta = rotate_target
+                    self._phase[pid] = 'translate'
+                else:
+                    new_theta = (piece.orientation_deg
+                                 + math.copysign(rot_step, heading_diff)) % 360.0
+                # Hold position while rotating.
 
-            if at_position:
-                new_x, new_y = cmd.target_x_mm, cmd.target_y_mm
-            elif heading_ok:
-                # Move forward along the current heading (not a free-direction
-                # move): project the step onto the travel direction.
-                new_x = cur_x + (dx / dist) * step
-                new_y = cur_y + (dy / dist) * step
-            else:
-                # Still rotating to face target — hold position
-                new_x, new_y = cur_x, cur_y
+            # ── Phase 2: Translate to target, preserving orientation ─────
+            elif phase == 'translate':
+                # Preserve the heading chosen during the rotate phase.
+                new_theta = self._rotate_to.get(pid, piece.orientation_deg)
+
+                if dist <= step:
+                    new_x, new_y = cmd.target_x_mm, cmd.target_y_mm
+                else:
+                    new_x = cur_x + (dx / dist) * step
+                    new_y = cur_y + (dy / dist) * step
 
             # ── 1. Boundary enforcement (clamp to table limits) ──────────
             clamped_x = max(self._x_min, min(self._x_max, new_x))
@@ -198,19 +209,22 @@ class MotionSimulator(QObject):
                 new_x, new_y = cur_x, cur_y
 
             # ── Arrival check ─────────────────────────────────────────────
-            # Arrived when spatial target reached AND final orientation settled.
-            pos_done = math.hypot(new_x - cmd.target_x_mm, new_y - cmd.target_y_mm) <= 0.5
-            rot_done = abs((final_theta - new_theta + 180.0) % 360.0 - 180.0) < 0.5
-            if pos_done and rot_done:
+            # Arrived when translate phase completes (position reached).
+            pos_done = (self._phase.get(pid) == 'translate'
+                        and math.hypot(new_x - cmd.target_x_mm,
+                                       new_y - cmd.target_y_mm) <= 0.5)
+            if pos_done:
                 arrived_ids.append(pid)
 
             # ── Commit to board state and emit ───────────────────────────
             self._board.update_piece_position(pid, new_x, new_y, new_theta)
-            self.position_updated.emit(pid, new_x, new_y, new_theta)
+            self.position_updated.emit(pid, new_x, new_y, new_theta, 0.0)
 
         # Clean up finished moves
         for pid in arrived_ids:
             self._active.pop(pid, None)
+            self._phase.pop(pid, None)
+            self._rotate_to.pop(pid, None)
             self.move_complete.emit(pid)
             self.log_message.emit(f'SIM: 0x{pid:02X} arrived at target')
 

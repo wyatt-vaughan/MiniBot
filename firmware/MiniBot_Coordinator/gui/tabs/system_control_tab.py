@@ -15,12 +15,11 @@ from typing import Optional
 
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QSpinBox, QVBoxLayout, QWidget,
+    QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+    QSpinBox, QVBoxLayout, QWidget,
 )
 
-from comms.protocol import build_mag, build_rate
-from comms.serial_handler import SerialHandler
+from comms.protocol import build_electromagnet, build_sync
 from config import COMM, GUI
 
 
@@ -28,20 +27,22 @@ class SystemControlTab(QWidget):
     """System control panel tab.
 
     Signals:
-        send_raw(bytes) — emit bytes to the serial handler
+        send_raw(bytes)            — emit bytes to the serial handler
+        poll_interval_changed(int) — new poll interval in ms
+        poll_enabled_changed(bool) — enable/disable auto-polling
+        poll_target_changed(int)   — new poll target piece ID
+
+    Note: serial connection controls live in the main window connection bar.
     """
 
-    send_raw = pyqtSignal(bytes)
+    send_raw              = pyqtSignal(bytes)
+    poll_interval_changed = pyqtSignal(int)
+    poll_enabled_changed  = pyqtSignal(bool)
+    poll_target_changed   = pyqtSignal(int)
 
-    def __init__(
-        self,
-        serial_handler: SerialHandler,
-        parent: Optional[QWidget] = None,
-    ) -> None:
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._handler = serial_handler
         self._build_ui()
-        self._wire_signals()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -51,71 +52,37 @@ class SystemControlTab(QWidget):
         root = QVBoxLayout(self)
         root.setSpacing(10)
 
-        # --- Connection ---
-        conn_group = QGroupBox('Serial Connection')
-        cl = QVBoxLayout(conn_group)
-
-        port_row = QHBoxLayout()
-        port_row.addWidget(QLabel('Port:'))
-        self._port_combo = QComboBox()
-        self._port_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self._refresh_ports()
-        port_row.addWidget(self._port_combo)
-
-        self._btn_refresh_ports = QPushButton('↺')
-        self._btn_refresh_ports.setFixedWidth(28)
-        self._btn_refresh_ports.setToolTip('Refresh serial port list')
-        self._btn_refresh_ports.clicked.connect(self._refresh_ports)
-        port_row.addWidget(self._btn_refresh_ports)
-        cl.addLayout(port_row)
-
-        baud_row = QHBoxLayout()
-        baud_row.addWidget(QLabel('Baud rate:'))
-        self._baud_combo = QComboBox()
-        for baud in [9600, 57600, 115200, 230400, 460800]:
-            self._baud_combo.addItem(str(baud), userData=baud)
-        default_idx = self._baud_combo.findData(COMM.DEFAULT_BAUD_RATE)
-        if default_idx >= 0:
-            self._baud_combo.setCurrentIndex(default_idx)
-        baud_row.addWidget(self._baud_combo)
-        baud_row.addStretch()
-        cl.addLayout(baud_row)
-
-        btn_row = QHBoxLayout()
-        self._btn_connect = QPushButton('Connect')
-        self._btn_connect.setMinimumHeight(36)
-        self._btn_connect.clicked.connect(self._on_connect)
-        btn_row.addWidget(self._btn_connect)
-
-        self._btn_disconnect = QPushButton('Disconnect')
-        self._btn_disconnect.setMinimumHeight(36)
-        self._btn_disconnect.setEnabled(False)
-        self._btn_disconnect.clicked.connect(self._on_disconnect)
-        btn_row.addWidget(self._btn_disconnect)
-        cl.addLayout(btn_row)
-
-        self._status_label = QLabel('Status: Disconnected')
-        self._status_label.setStyleSheet('color: gray;')
-        cl.addWidget(self._status_label)
-
-        root.addWidget(conn_group)
-
         # --- Polling ---
         poll_group = QGroupBox('Position Polling')
         pl = QVBoxLayout(poll_group)
+
+        self._poll_enable_check = QCheckBox('Enable polling')
+        self._poll_enable_check.setChecked(True)
+        self._poll_enable_check.toggled.connect(self.poll_enabled_changed)
+        pl.addWidget(self._poll_enable_check)
+
         poll_row = QHBoxLayout()
         poll_row.addWidget(QLabel('Interval (ms):'))
         self._poll_spin = QSpinBox()
         self._poll_spin.setRange(100, 60000)
         self._poll_spin.setSingleStep(100)
         self._poll_spin.setValue(COMM.DEFAULT_POLL_INTERVAL_MS)
+        self._poll_spin.valueChanged.connect(self._on_set_rate)
         poll_row.addWidget(self._poll_spin)
-
-        self._btn_set_rate = QPushButton('Set Rate')
-        self._btn_set_rate.clicked.connect(self._on_set_rate)
-        poll_row.addWidget(self._btn_set_rate)
         poll_row.addStretch()
         pl.addLayout(poll_row)
+
+        target_row = QHBoxLayout()
+        target_row.addWidget(QLabel('Target ID (hex):'))
+        self._poll_target_spin = QSpinBox()
+        self._poll_target_spin.setRange(0x00, 0xFF)
+        self._poll_target_spin.setDisplayIntegerBase(16)
+        self._poll_target_spin.setPrefix('0x')
+        self._poll_target_spin.setValue(0xFF)
+        self._poll_target_spin.valueChanged.connect(self.poll_target_changed)
+        target_row.addWidget(self._poll_target_spin)
+        target_row.addStretch()
+        pl.addLayout(target_row)
 
         root.addWidget(poll_group)
 
@@ -123,21 +90,12 @@ class SystemControlTab(QWidget):
         mag_group = QGroupBox('Electromagnets')
         ml = QVBoxLayout(mag_group)
 
-        mag_label_row = QHBoxLayout()
-        mag_label_row.addWidget(QLabel('Off'))
-        mag_label_row.addStretch()
-        mag_label_row.addWidget(QLabel('On'))
-        ml.addLayout(mag_label_row)
+        self._mag_check = QCheckBox('Enable Electromagnet')
+        self._mag_check.setChecked(False)
+        self._mag_check.toggled.connect(self._on_mag_check)
+        ml.addWidget(self._mag_check)
 
-        self._mag_slider = QSlider(Qt.Orientation.Horizontal)
-        self._mag_slider.setRange(COMM.MAG_OFF, COMM.MAG_ON)
-        self._mag_slider.setTickInterval(1)
-        self._mag_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._mag_slider.setValue(COMM.MAG_OFF)
-        self._mag_slider.valueChanged.connect(self._on_mag_slider)
-        ml.addWidget(self._mag_slider)
-
-        self._btn_mag_sync = QPushButton('Send Electromagnet Sync')
+        self._btn_mag_sync = QPushButton('Send Sync')
         self._btn_mag_sync.setMinimumHeight(36)
         self._btn_mag_sync.clicked.connect(self._on_mag_sync)
         ml.addWidget(self._btn_mag_sync)
@@ -145,56 +103,18 @@ class SystemControlTab(QWidget):
         root.addWidget(mag_group)
         root.addStretch()
 
-    def _wire_signals(self) -> None:
-        self._handler.connection_changed.connect(self._on_connection_changed)
-
     # ------------------------------------------------------------------
-    # Public slots
+    # Button / widget handlers
     # ------------------------------------------------------------------
-
-    @pyqtSlot(bool)
-    def _on_connection_changed(self, connected: bool) -> None:
-        if connected:
-            self._status_label.setText('Status: Connected')
-            self._status_label.setStyleSheet('color: green; font-weight: bold;')
-        else:
-            self._status_label.setText('Status: Disconnected')
-            self._status_label.setStyleSheet('color: gray;')
-        self._btn_connect.setEnabled(not connected)
-        self._btn_disconnect.setEnabled(connected)
-
-    # ------------------------------------------------------------------
-    # Button / slider handlers
-    # ------------------------------------------------------------------
-
-    def _on_connect(self) -> None:
-        port = self._port_combo.currentText()
-        baud = self._baud_combo.currentData() or COMM.DEFAULT_BAUD_RATE
-        if port:
-            self._handler.connect_port(port, baud)
-
-    def _on_disconnect(self) -> None:
-        self._handler.disconnect_port()
 
     def _on_set_rate(self) -> None:
         interval_ms = self._poll_spin.value()
-        self.send_raw.emit(build_rate(interval_ms))
+        self.poll_interval_changed.emit(interval_ms)
 
-    def _on_mag_slider(self, value: int) -> None:
-        self.send_raw.emit(build_mag(value))
+    def _on_mag_check(self, checked: bool) -> None:
+        self.send_raw.emit(build_electromagnet(COMM.MAG_ON if checked else COMM.MAG_OFF))
 
     def _on_mag_sync(self) -> None:
-        self.send_raw.emit(build_mag(COMM.MAG_SYNC))
+        self.send_raw.emit(build_sync())
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
 
-    def _refresh_ports(self) -> None:
-        current = self._port_combo.currentText()
-        self._port_combo.clear()
-        ports = SerialHandler.available_ports()
-        for p in ports:
-            self._port_combo.addItem(p)
-        if current in ports:
-            self._port_combo.setCurrentText(current)

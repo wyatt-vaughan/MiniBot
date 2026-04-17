@@ -1,5 +1,6 @@
 #include "battery_monitor.h"
 #include "esp_now_communicator.h"
+#include "config.h"
 
 static uint8_t battery_adc_pin = 0;
 static RollingAverage<BATTERY_AVG_WINDOW_SIZE> battery_avg_v;
@@ -18,13 +19,18 @@ void BatteryMonitor_RecordVoltage() {
 }
 
 void BatteryMonitor_Task(void* pvParameters) {
-    Robot* robot = (Robot*)pvParameters;
-    
-    if (robot == NULL) {
+    BatteryMonitorParams* params = (BatteryMonitorParams*)pvParameters;
+
+    if (params == NULL || params->robot == NULL) {
         vTaskDelete(NULL);
         return;
     }
-    
+
+    Robot* robot = params->robot;
+    bool tasks_suspended = false;
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     while (1) {
         BatteryMonitor_RecordVoltage();
         float current_voltage = battery_avg_v.avg();
@@ -44,6 +50,27 @@ void BatteryMonitor_Task(void* pvParameters) {
             }
         } else {
             low_battery_alerted = false;
+        }
+
+        // Determine whether other tasks should be suspended
+        bool should_suspend = robot->getBatteryCritical() ||
+                              (!ENABLE_BOT_WHILE_CHARGING && robot->getBatteryCharging());
+
+        if (should_suspend && !tasks_suspended) {
+            Serial.printf("Battery condition (%.2fV) requires suspending tasks.\n", current_voltage);
+            robot->disableMotors();
+            if (params->kinematics_task != NULL)              vTaskSuspend(params->kinematics_task);
+            if (params->communicator_task != NULL)            vTaskSuspend(params->communicator_task);
+            if (params->position_estimator_sensor_task != NULL) vTaskSuspend(params->position_estimator_sensor_task);
+            if (params->position_estimator_calc_task != NULL)  vTaskSuspend(params->position_estimator_calc_task);
+            tasks_suspended = true;
+        } else if (!should_suspend && tasks_suspended) {
+            Serial.printf("Battery voltage (%.2fV) recovered. Resuming tasks.\n", current_voltage);
+            if (params->kinematics_task != NULL)              vTaskResume(params->kinematics_task);
+            if (params->communicator_task != NULL)            vTaskResume(params->communicator_task);
+            if (params->position_estimator_sensor_task != NULL) vTaskResume(params->position_estimator_sensor_task);
+            if (params->position_estimator_calc_task != NULL)  vTaskResume(params->position_estimator_calc_task);
+            tasks_suspended = false;
         }
         
         vTaskDelay(pdMS_TO_TICKS(BATTERY_POLL_INTERVAL_MS));

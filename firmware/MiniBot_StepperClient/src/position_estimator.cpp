@@ -22,6 +22,7 @@ static QueueHandle_t sync_result_queue = NULL;
 
 static int64_t sync_pulse_time_us = 0;
 static int64_t sync_deadline_us      = 0;
+static int64_t next_frame_time_us = 0;
 static bool synced = false;
 
 static const float emag_positions[][2] = EMAG_POSITIONS_MM;
@@ -120,6 +121,19 @@ static bool noiseCorrectedAngle(const float fwd_x, const float fwd_y, const floa
     return true;
 }
 
+static void sensorToRobotFrame(float sensor_x, float sensor_y, float sensor_theta,
+                               float* robot_x, float* robot_y, float* robot_theta) {
+    // Sensor is mounted upside-down: Y-axis is mirrored, which negates the heading
+    float theta = sensor_theta;
+
+    // Translate from sensor position to robot center using body-frame offset
+    float cos_t = cosf(theta);
+    float sin_t = sinf(theta);
+    *robot_x = sensor_x - SENSOR_OFFSET_X_MM * cos_t + SENSOR_OFFSET_Y_MM * sin_t;
+    *robot_y = sensor_y - SENSOR_OFFSET_X_MM * sin_t - SENSOR_OFFSET_Y_MM * cos_t;
+    *robot_theta = theta;
+}
+
 static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData* processed_data, bool debug_print=false) {
     uint8_t valid_count = 0;
 
@@ -140,14 +154,17 @@ static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData
         uint16_t rev_count = 0;
 
         for (uint16_t s = 0; s < r->count; s++) {
+            float sx = r->x[s] - frame->bg_x;
+            float sy = r->y[s] - frame->bg_y;
+            float sz = r->z[s] - frame->bg_z;
             if (debug_print) {
-                Serial.printf("  sample %u:\tts: %lld\tX=%7.4f\tY=%7.4f\tZ=%7.4f\t%s\n", s, r->timestamp_us[s], r->x[s], r->y[s], r->z[s], r->is_forward[s] ? "FWD" : "REV");
+                Serial.printf("  sample %u:\tts: %lld\tX=%7.4f\tY=%7.4f\tZ=%7.4f\t%s\n", s, r->timestamp_us[s], sx, sy, sz, r->is_forward[s] ? "FWD" : "REV");
             }
             if (r->is_forward[s]) {
-                sum_fwd_x += r->x[s]; sum_fwd_y += r->y[s]; sum_fwd_z += r->z[s];
+                sum_fwd_x += sx; sum_fwd_y += sy; sum_fwd_z += sz;
                 fwd_count++;
             } else {
-                sum_rev_x += r->x[s]; sum_rev_y += r->y[s]; sum_rev_z += r->z[s];
+                sum_rev_x += sx; sum_rev_y += sy; sum_rev_z += sz;
                 rev_count++;
             }
         }
@@ -188,13 +205,13 @@ static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData
                     Serial.println("  WARNING: Large azimuth angle difference, skipping calculation for this emag");
                 }
 
-                float elevation_rad;
-                if (noiseCorrectedAngle(avg_fwd_z, sqrtf(avg_fwd_x * avg_fwd_x + avg_fwd_y * avg_fwd_y), avg_rev_z, sqrtf(avg_rev_x * avg_rev_x + avg_rev_y * avg_rev_y), &elevation_rad)) {
-                    processed_data[i].elevation_angle_rad = elevation_rad;
-                }
-                else {
-                    Serial.println("  WARNING: Large elevation angle difference, skipping calculation for this emag");
-                }
+                // float elevation_rad;
+                // if (noiseCorrectedAngle(avg_fwd_z, sqrtf(avg_fwd_x * avg_fwd_x + avg_fwd_y * avg_fwd_y), avg_rev_z, sqrtf(avg_rev_x * avg_rev_x + avg_rev_y * avg_rev_y), &elevation_rad)) {
+                //     processed_data[i].elevation_angle_rad = elevation_rad;
+                // }
+                // else {
+                //     Serial.println("  WARNING: Large elevation angle difference, skipping calculation for this emag");
+                // }
             }
             else {
                 if (debug_print) {
@@ -333,7 +350,7 @@ static bool solvePositions(CalculatedPosition* calculated_positions, ProcessedEm
 
 static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robot) {
     uint32_t calc_start = micros();
-    bool debug_print = false;
+    bool debug_print = true;
 
     if (debug_print) Serial.println("========== EMAG FRAME DATA ==========");
     ProcessedEmagData processed_data[EMAG_COUNT];
@@ -346,10 +363,38 @@ static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robo
 
     if (debug_print) Serial.println("========== SOLVE POSITIONS ==========");
     bool solutions_exist = solvePositions(calculated_positions, processed_data);
-    // TODO if multiple solutions, average them weighted by confidence
 
     if (solutions_exist) {
-        robot->setTruePose(calculated_positions[0].pos_x_mm, calculated_positions[0].pos_y_mm, calculated_positions[0].ang_rad);
+        // Confidence-weighted average of all solved pairs
+        float sum_conf = 0.0f;
+        float sum_x = 0.0f, sum_y = 0.0f;
+        // For angular averaging, use sin/cos decomposition to handle wrap-around
+        float sum_sin = 0.0f, sum_cos = 0.0f;
+
+        for (uint8_t i = 0; i < 3; i++) {
+            float c = calculated_positions[i].confidence;
+            if (c <= 0.0f) continue;
+            sum_conf += c;
+            sum_x += c * calculated_positions[i].pos_x_mm;
+            sum_y += c * calculated_positions[i].pos_y_mm;
+            sum_sin += c * sinf(calculated_positions[i].ang_rad);
+            sum_cos += c * cosf(calculated_positions[i].ang_rad);
+
+            if (debug_print) {
+                Serial.printf("  pair[%u]: pos=(%.1f, %.1f) mm  θ=%.2f rad  conf=%.3f\n",
+                              i, calculated_positions[i].pos_x_mm, calculated_positions[i].pos_y_mm,
+                              calculated_positions[i].ang_rad, c);
+            }
+        }
+
+        float inv_conf = 1.0f / sum_conf;
+        float sensor_x = sum_x * inv_conf;
+        float sensor_y = sum_y * inv_conf;
+        float sensor_theta = atan2f(sum_sin, sum_cos);
+
+        float robot_x, robot_y, robot_theta;
+        sensorToRobotFrame(sensor_x, sensor_y, sensor_theta, &robot_x, &robot_y, &robot_theta);
+        robot->setTruePose(robot_x, robot_y, robot_theta, sum_conf);
     }
 
     // Report position calculation time, this is bad if longer than frame length
@@ -363,6 +408,14 @@ bool PositionEstimator_StartSync(uint16_t timeout_ms) {
     sync_deadline_us = esp_timer_get_time() + (int64_t)timeout_ms * 1000;
     current_state = STATE_START_PULSES;
     return true;
+}
+
+void PositionEstimator_SetSyncTime(int64_t sync_time_us) {
+    sync_pulse_time_us = sync_time_us;
+    next_frame_time_us = sync_time_us;
+    synced = true;
+    current_state = STATE_IDLE;
+    Serial.printf("Sync time: {%lu} us\n", sync_time_us);
 }
 
 QueueHandle_t PositionEstimator_GetSyncResultQueue(void) {
@@ -384,9 +437,8 @@ void PositionEstimator_SensorTask(void* pvParameters) {
         return;
     }
 
-    const int64_t slot_us = 1000 * (EMAG_FWD_ON_TIME_MS + EMAG_GAP_TIME_MS + EMAG_REV_ON_TIME_MS + EMAG_GAP_TIME_MS);
+    const int64_t slot_us = 1000 * (EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS);
     int64_t last_sample_time = esp_timer_get_time();
-    int64_t next_frame_time_us;
     bool set_reset_done = false;
     static constexpr uint8_t MAG_FAIL_THRESHOLD = 20;
     uint8_t consecutive_mag_failures = 0;
@@ -416,12 +468,14 @@ void PositionEstimator_SensorTask(void* pvParameters) {
             consecutive_mag_failures = 0;
             last_sample_time = current_micros;
             float mx = mag.getFieldGaussX();
-            float my = mag.getFieldGaussY();
-            float mz = mag.getFieldGaussZ();
+            float my = -mag.getFieldGaussY();  // Sensor is mounted upside-down (flipped around X-axis)
+            float mz = -mag.getFieldGaussZ();
 
             avgX.add(mx);
             avgY.add(my);
             avgZ.add(mz);
+
+            // Serial.printf("%ld us  \tmx: %.3f\tmy: %.3f\tmz: %.3f\n", current_micros, mx, my, mz);
 
             switch (current_state) {
                 case STATE_START_PULSES: {
@@ -480,9 +534,8 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                                     (offset_us <  EMAG_FWD_ON_TIME_MS * 1000 - EMAG_TRIM_MS * 1000);
 
                     // Reverse active window
-                    const uint32_t rev_start = EMAG_FWD_ON_TIME_MS + EMAG_GAP_TIME_MS;
-                    bool in_rev = (offset_us >= (rev_start + EMAG_TRIM_MS) * 1000) &&
-                                    (offset_us <  (rev_start + EMAG_REV_ON_TIME_MS - EMAG_TRIM_MS) * 1000);
+                    bool in_rev = (offset_us >= (EMAG_FWD_ON_TIME_MS + EMAG_TRIM_MS) * 1000) &&
+                                    (offset_us <  (EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS - EMAG_TRIM_MS) * 1000);
 
                     if (in_fwd || in_rev) {
                         EmagReading* r = &current_frame.readings[emag_index];
@@ -557,6 +610,16 @@ void PositionEstimator_CalcTask(void* pvParameters) {
     }
 
     EmagFrameData frame;
+
+    // debug test loop
+    // while (1) {
+    //     // Generate a random position centered around 200,200 with some noise and inject into robot for testing
+    //     float test_x = 200.0f + random(-10, 11);
+    //     float test_y = 200.0f + random(-10, 11);
+    //     float test_theta = random(-50, 51) / 100.0f;
+    //     robot->setTruePose(test_x, test_y, test_theta, 1.0f);
+    //     vTaskDelay(pdMS_TO_TICKS(100));
+    // }
 
     while (1) {
         if (xQueueReceive(emag_frame_queue, &frame, portMAX_DELAY) == pdTRUE) {

@@ -240,12 +240,12 @@ const char index_html[] PROGMEM = R"rawliteral(
 void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, 
                AwsEventType type, void *arg, uint8_t *data, size_t len) {
   if (type == WS_EVT_CONNECT) {
-    Serial.printf("WebSocket client #%u connected\n", client->id());
+    DEBUG_PRINTF("WebSocket client #%u connected\n", client->id());
     // Don't send initial status - client will get updates as they occur
     // This prevents overwhelming the WebSocket queue
   } 
   else if (type == WS_EVT_DISCONNECT) {
-    Serial.printf("WebSocket client #%u disconnected\n", client->id());
+    DEBUG_PRINTF("WebSocket client #%u disconnected\n", client->id());
   }
   else if (type == WS_EVT_DATA) {
     AwsFrameInfo *info = (AwsFrameInfo*)arg;
@@ -282,13 +282,13 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
           
           // Send to command queue
           if (xQueueSend(commandQueue, &msg, 0) == pdPASS) {
-            Serial.printf("Command queued for robot 0x%02X: x=%.2f y=%.2f a=%.2f d=%.2f\n", 
+            DEBUG_PRINTF("Command queued for robot 0x%02X: x=%.2f y=%.2f a=%.2f d=%.2f\n", 
                          cmd.targetID, cmd.x, cmd.y, cmd.angle, cmd.duration);
           } else {
-            Serial.println("Command queue full!");
+            DEBUG_PRINTLN("Command queue full!");
           }
         } else {
-          Serial.println("Failed to parse command message");
+          DEBUG_PRINTLN("Failed to parse command message");
         }
       } else if (message.startsWith("req,")) {
         // Parse request: format "req,id"
@@ -312,9 +312,9 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         
         // Send to command queue
         if (xQueueSend(commandQueue, &msg, 0) == pdPASS) {
-          Serial.printf("Position request queued for robot 0x%02X\n", cmd.targetID);
+          DEBUG_PRINTF("Position request queued for robot 0x%02X\n", cmd.targetID);
         } else {
-          Serial.println("Command queue full!");
+          DEBUG_PRINTLN("Command queue full!");
         }
       } else if (message.startsWith("mag,")) {
         // Parse magnet field request: format "mag,id"
@@ -338,23 +338,23 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client,
         
         // Send to command queue
         if (xQueueSend(commandQueue, &msg, 0) == pdPASS) {
-          Serial.printf("Magnet field request queued for robot 0x%02X\n", cmd.targetID);
+          DEBUG_PRINTF("Magnet field request queued for robot 0x%02X\n", cmd.targetID);
         } else {
-          Serial.println("Command queue full!");
+          DEBUG_PRINTLN("Command queue full!");
         }
       } else if (message.startsWith("emag,")) {
         // Parse electromagnet control: format "emag,0" or "emag,1"
         int enabled = message.substring(5).toInt();
         setElectromagnetEnabled(enabled == 1);
-        Serial.printf("Electromagnet control set to: %s\n", enabled ? "ENABLED" : "DISABLED");
+        DEBUG_PRINTF("Electromagnet control set to: %s\n", enabled ? "ENABLED" : "DISABLED");
       } else if (message == "sync") {
         // Position sync: broadcast PosSyncCommand to all units
         CommandMessage syncMsg = {};
         syncMsg.commandType = CMD_TYPE_POS_SYNC;
         if (xQueueSend(commandQueue, &syncMsg, 0) == pdPASS) {
-          Serial.println("Pos sync command queued");
+          DEBUG_PRINTLN("Pos sync command queued");
         } else {
-          Serial.println("Command queue full!");
+          DEBUG_PRINTLN("Command queue full!");
         }
       }
     }
@@ -388,12 +388,12 @@ void initGUI() {
   });
   
   server.begin();
-  Serial.println("Web server started");
+  DEBUG_PRINTLN("Web server started");
 }
 
 // FreeRTOS GUI Task
 void guiTask(void *parameter) {
-  Serial.println("GUI Task started");
+  DEBUG_PRINTLN("GUI Task started");
   
   GUIStatus status;
   
@@ -445,14 +445,14 @@ void guiTask(void *parameter) {
         }
         
         if (status.ackReceived) {
-          Serial.printf("Status update for robot 0x%02X: (%.2f, %.2f) %.3frad %.2fV\n",
+          DEBUG_PRINTF("Status update for robot 0x%02X: (%.2f, %.2f) %.3frad %.2fV\n",
                        status.targetID, status.currentX, status.currentY, 
                        status.currentAngle, status.batteryVoltage);
         } else if (status.magnetFieldValid) {
-          Serial.printf("Status update for robot 0x%02X: Magnet [%.2f, %.2f, %.2f] gauss\n",
+          DEBUG_PRINTF("Status update for robot 0x%02X: Magnet [%.2f, %.2f, %.2f] gauss\n",
                        status.targetID, status.magnetX_gauss, status.magnetY_gauss, status.magnetZ_gauss);
         } else {
-          Serial.printf("ACK timeout for robot 0x%02X\n", status.targetID);
+          DEBUG_PRINTF("ACK timeout for robot 0x%02X\n", status.targetID);
         }
       }
     }

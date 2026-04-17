@@ -12,6 +12,7 @@ extern TaskHandle_t emagTaskHandle;
 // Control flags
 extern volatile bool emagEnabled;
 extern volatile bool syncPulseRequested;
+extern volatile int64_t nextFrameStartUs;
 
 // Initialize electromagnets
 void initElectromagnets();
@@ -33,5 +34,8 @@ bool getElectromagnetEnabled();
 
 // Request a one-shot 3ms sync pulse at the start of the next emag frame
 void triggerSyncPulse();
+
+// Returns microseconds until the start of the next emag frame
+uint32_t getTimeToNextFrameUs();
 
 #endif // ELECTROMAGNET_TASK_H
