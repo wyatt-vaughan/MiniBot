@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt
+from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt, QTimer
 from PyQt6.QtWidgets import (
     QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
     QSpinBox, QVBoxLayout, QWidget,
@@ -42,6 +42,8 @@ class SystemControlTab(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._sync_timer = QTimer(self)
+        self._sync_timer.timeout.connect(self._on_mag_sync)
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -95,12 +97,33 @@ class SystemControlTab(QWidget):
         self._mag_check.toggled.connect(self._on_mag_check)
         ml.addWidget(self._mag_check)
 
+        root.addWidget(mag_group)
+
+        # --- Electromagnet Sync ---
+        sync_group = QGroupBox('Electromagnet Sync')
+        sl = QVBoxLayout(sync_group)
+
         self._btn_mag_sync = QPushButton('Send Sync')
         self._btn_mag_sync.setMinimumHeight(36)
         self._btn_mag_sync.clicked.connect(self._on_mag_sync)
-        ml.addWidget(self._btn_mag_sync)
+        sl.addWidget(self._btn_mag_sync)
 
-        root.addWidget(mag_group)
+        auto_row = QHBoxLayout()
+        self._auto_sync_check = QCheckBox('Auto-sync every')
+        self._auto_sync_check.setChecked(False)
+        self._auto_sync_check.toggled.connect(self._on_auto_sync_toggled)
+        auto_row.addWidget(self._auto_sync_check)
+        self._auto_sync_spin = QSpinBox()
+        self._auto_sync_spin.setRange(1, 3600)
+        self._auto_sync_spin.setSingleStep(1)
+        self._auto_sync_spin.setValue(5)
+        self._auto_sync_spin.setSuffix(' s')
+        self._auto_sync_spin.valueChanged.connect(self._on_auto_sync_interval_changed)
+        auto_row.addWidget(self._auto_sync_spin)
+        auto_row.addStretch()
+        sl.addLayout(auto_row)
+
+        root.addWidget(sync_group)
         root.addStretch()
 
     # ------------------------------------------------------------------
@@ -116,5 +139,15 @@ class SystemControlTab(QWidget):
 
     def _on_mag_sync(self) -> None:
         self.send_raw.emit(build_sync())
+
+    def _on_auto_sync_toggled(self, checked: bool) -> None:
+        if checked:
+            self._sync_timer.start(self._auto_sync_spin.value() * 1000)
+        else:
+            self._sync_timer.stop()
+
+    def _on_auto_sync_interval_changed(self, value: int) -> None:
+        if self._sync_timer.isActive():
+            self._sync_timer.start(value * 1000)
 
 

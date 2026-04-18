@@ -17,7 +17,7 @@ static QueueHandle_t magFieldQueue = NULL;
 
 // ESP-NOW callback when data is sent
 void onDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  Serial.print("Broadcast Send Status: ");
+  DEBUG_PRINTLN("Broadcast Send Status: ");
   DEBUG_PRINTLN(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
 }
 

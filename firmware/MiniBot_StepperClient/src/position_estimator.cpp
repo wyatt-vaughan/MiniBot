@@ -1,9 +1,14 @@
 #include "position_estimator.h"
 #include "mmc5633.h"
 #include "utils.h"
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_POS_EST
+#include "esp_log.h"
 #include "config.h"
 #include <Arduino.h>
 #include <Wire.h>
+
+static const char* TAG = "POS_EST";
 
 static MMC5633NJL mag;
 static RollingAverage<10> avgX;
@@ -30,27 +35,27 @@ static const float emag_positions[][2] = EMAG_POSITIONS_MM;
 bool PositionEstimator_Init(void) {
     emag_frame_queue = xQueueCreate(1, sizeof(EmagFrameData));
     if (emag_frame_queue == NULL) {
-        Serial.println("ERROR: Failed to create emag frame queue");
+        ESP_LOGE(TAG, "Failed to create emag frame queue");
         return false;
     }
 
     sync_result_queue = xQueueCreate(1, sizeof(PosSyncResult));
     if (sync_result_queue == NULL) {
-        Serial.println("ERROR: Failed to create sync result queue");
+        ESP_LOGE(TAG, "Failed to create sync result queue");
         return false;
     }
 
     if (!mag.begin(SDA_PIN, SCL_PIN)) {
-        Serial.println("ERROR: MMC5633NJL init failed");
+        ESP_LOGE(TAG, "MMC5633NJL init failed");
         return false;
     }
     
-    Serial.println("MMC5633NJL magnetometer ready");
+    ESP_LOGD(TAG, "MMC5633NJL magnetometer ready");
     
     if (!mag.runSelfTest()) {
-        Serial.println("WARNING: Magnetometer self-test failed");
+        ESP_LOGW(TAG, "Magnetometer self-test failed");
     } else {
-        Serial.println("Magnetometer self-test passed");
+        ESP_LOGD(TAG, "Magnetometer self-test passed");
     }
 
     mag_initialized = true;
@@ -134,40 +139,63 @@ static void sensorToRobotFrame(float sensor_x, float sensor_y, float sensor_thet
     *robot_theta = theta;
 }
 
-static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData* processed_data, bool debug_print=false) {
+static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData* processed_data) {
     uint8_t valid_count = 0;
 
-    if (debug_print) {
-        Serial.printf("Background field: X=%.4f  Y=%.4f  Z=%.4f Gauss\n",
+    ESP_LOGD(TAG, "Background field: X=%.4f  Y=%.4f  Z=%.4f Gauss",
                   frame->bg_x, frame->bg_y, frame->bg_z);
+
+    static bool samples_header_printed = false;
+    if (!samples_header_printed) {
+        Serial.print("emag");
+        for (int j = 0; j < 6; j++) Serial.printf(",fwd%d_az_rad,fwd%d_mag_G", j, j);
+        for (int j = 0; j < 6; j++) Serial.printf(",rev%d_az_rad,rev%d_mag_G", j, j);
+        Serial.println();
+        samples_header_printed = true;
     }
 
     for (uint8_t i = 0; i < EMAG_COUNT; i++) {
         const EmagReading* r = &frame->readings[i];
-        if (debug_print) {
-            Serial.printf("--- EMAG[%u]  samples=%u ---\n", i, r->count);
-        }
+        ESP_LOGD(TAG, "--- EMAG[%u]  samples=%u ---", i, r->count);
 
         float sum_fwd_x = 0.0f, sum_fwd_y = 0.0f, sum_fwd_z = 0.0f;
         uint16_t fwd_count = 0;
         float sum_rev_x = 0.0f, sum_rev_y = 0.0f, sum_rev_z = 0.0f;
         uint16_t rev_count = 0;
 
+        static constexpr uint8_t CSV_SAMPLE_SLOTS = 6;
+        float fwd_az[CSV_SAMPLE_SLOTS], fwd_mag[CSV_SAMPLE_SLOTS];
+        float rev_az[CSV_SAMPLE_SLOTS], rev_mag[CSV_SAMPLE_SLOTS];
+        uint8_t fwd_csv = 0, rev_csv = 0;
+
         for (uint16_t s = 0; s < r->count; s++) {
             float sx = r->x[s] - frame->bg_x;
             float sy = r->y[s] - frame->bg_y;
             float sz = r->z[s] - frame->bg_z;
-            if (debug_print) {
-                Serial.printf("  sample %u:\tts: %lld\tX=%7.4f\tY=%7.4f\tZ=%7.4f\t%s\n", s, r->timestamp_us[s], sx, sy, sz, r->is_forward[s] ? "FWD" : "REV");
-            }
+            ESP_LOGD(TAG, "  sample %u:\tts: %lld\tX=%7.4f\tY=%7.4f\tZ=%7.4f\t%s", s, r->timestamp_us[s], sx, sy, sz, r->is_forward[s] ? "FWD" : "REV");
+            float sample_az  = atan2f(sy, sx);
+            float sample_mag = sqrtf(sx*sx + sy*sy + sz*sz);
             if (r->is_forward[s]) {
                 sum_fwd_x += sx; sum_fwd_y += sy; sum_fwd_z += sz;
                 fwd_count++;
+                if (fwd_csv < CSV_SAMPLE_SLOTS) { fwd_az[fwd_csv] = sample_az; fwd_mag[fwd_csv] = sample_mag; fwd_csv++; }
             } else {
                 sum_rev_x += sx; sum_rev_y += sy; sum_rev_z += sz;
                 rev_count++;
+                if (rev_csv < CSV_SAMPLE_SLOTS) { rev_az[rev_csv] = sample_az; rev_mag[rev_csv] = sample_mag; rev_csv++; }
             }
         }
+
+        Serial.printf("%u", i);
+        for (uint8_t j = 0; j < CSV_SAMPLE_SLOTS; j++) {
+            if (j < fwd_csv) Serial.printf(",%.4f,%.4f", fwd_az[j], fwd_mag[j]);
+            else Serial.print(",,");
+        }
+        for (uint8_t j = 0; j < CSV_SAMPLE_SLOTS; j++) {
+            if (j < rev_csv) Serial.printf(",%.4f,%.4f", rev_az[j], rev_mag[j]);
+            else Serial.print(",,");
+        }
+        Serial.println();
 
         if (fwd_count > 0 && rev_count > 0) {
             float inv_fwd = 1.0f / fwd_count;
@@ -185,16 +213,11 @@ static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData
             float diff_z = avg_fwd_z - avg_rev_z;
             processed_data[i].magnitude_G = sqrtf(diff_x * diff_x + diff_y * diff_y + diff_z * diff_z);
 
-            if (debug_print) {
-                Serial.printf("  fwd avg: X=%7.2f  Y=%7.2f  Z=%7.2f  (n=%u)\n", avg_fwd_x, avg_fwd_y, avg_fwd_z, fwd_count);
-                Serial.printf("  rev avg: X=%7.2f  Y=%7.2f  Z=%7.2f  (n=%u)\n", avg_rev_x, avg_rev_y, avg_rev_z, rev_count);
-                Serial.printf("  signal strength: %.4f Gauss", processed_data[i].magnitude_G);
-            }
+            ESP_LOGD(TAG, "  fwd avg: X=%7.2f  Y=%7.2f  Z=%7.2f  (n=%u)", avg_fwd_x, avg_fwd_y, avg_fwd_z, fwd_count);
+            ESP_LOGD(TAG, "  rev avg: X=%7.2f  Y=%7.2f  Z=%7.2f  (n=%u)", avg_rev_x, avg_rev_y, avg_rev_z, rev_count);
 
             if (processed_data[i].magnitude_G >= EMAG_MIN_SIGNAL_GAUSS) {
-                if (debug_print) {
-                    Serial.println(" [VALID]");
-                }
+                ESP_LOGD(TAG, "  signal strength: %.4f Gauss [VALID]", processed_data[i].magnitude_G);
                 valid_count++;
 
                 float azimuth_rad;
@@ -202,7 +225,7 @@ static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData
                     processed_data[i].azimuth_angle_rad = azimuth_rad;
                 }
                 else {
-                    Serial.println("  WARNING: Large azimuth angle difference, skipping calculation for this emag");
+                    ESP_LOGW(TAG, "Large azimuth angle difference, skipping calculation for emag[%u]", i);
                 }
 
                 // float elevation_rad;
@@ -214,21 +237,23 @@ static uint8_t processEmagReadings(const EmagFrameData* frame, ProcessedEmagData
                 // }
             }
             else {
-                if (debug_print) {
-                    Serial.println(" [INVALID - below signal threshold]");
-                }
+                ESP_LOGD(TAG, "  signal strength: %.4f Gauss [INVALID - below signal threshold]", processed_data[i].magnitude_G);
             }
         }
         else {
-            if (debug_print) {
-                Serial.println("  insufficient fwd/rev samples - skipped");
-            }
+            ESP_LOGD(TAG, "  emag[%u]: insufficient fwd/rev samples - skipped", i);
         }
     }
     return valid_count;
 }
 
 static bool populateEmagIndices(CalculatedPosition* calculated_positions, ProcessedEmagData* processed_data, uint8_t valid_emag_count) {
+    for (uint8_t i = 0; i < 3; i++) {
+        calculated_positions[i].emag_index_0 = 0xFF;
+        calculated_positions[i].emag_index_1 = 0xFF;
+        calculated_positions[i].confidence = 0.0f;
+    }
+
     uint8_t indices[3] = {0xFF, 0xFF, 0xFF};
     switch (valid_emag_count) {
         case 0:
@@ -284,6 +309,12 @@ static bool populateEmagIndices(CalculatedPosition* calculated_positions, Proces
 static bool solvePositions(CalculatedPosition* calculated_positions, ProcessedEmagData* processed_data) {
     bool any_solved = false;
 
+    static bool solve_header_printed = false;
+    if (!solve_header_printed) {
+        Serial.println("pair,idx0,idx1,e0x_mm,e0y_mm,e1x_mm,e1y_mm,m0_G,m1_G,a0_rad,a1_rad,ratio,da_rad,P,Q,denom,d1_mm,A,B,beta1_rad,theta_rad,rx_mm,ry_mm,confidence");
+        solve_header_printed = true;
+    }
+
     for (uint8_t i = 0; i < 3; i++) {
         if (calculated_positions[i].emag_index_0 == 0xFF || calculated_positions[i].emag_index_1 == 0xFF) {
             continue;
@@ -310,7 +341,9 @@ static bool solvePositions(CalculatedPosition* calculated_positions, ProcessedEm
         float denom = P * P + Q * Q;
 
         if (denom < 1e-6f) {
-            Serial.printf("  pair[%u]: degenerate geometry (P²+Q²=%.6f), skipped\n", i, denom);
+            ESP_LOGD(TAG, "  pair[%u]: degenerate geometry (P^2+Q^2=%.6f), skipped", i, denom);
+            Serial.printf("%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,,,,,,,,\n",
+                          i, idx0, idx1, e0x, e0y, e1x, e1y, m0, m1, a0, a1, ratio, da, P, Q, denom);
             continue;
         }
 
@@ -341,8 +374,8 @@ static bool solvePositions(CalculatedPosition* calculated_positions, ProcessedEm
         calculated_positions[i].confidence = fminf(m0, m1) * sqrtf(denom);
         any_solved = true;
 
-        // Serial.printf("  pair[%u]: emags(%u,%u) → pos=(%.1f, %.1f) mm  θ=%.2f rad  conf=%.3f\n",
-        //               i, idx0, idx1, rx, ry, theta, calculated_positions[i].confidence);
+        Serial.printf("%u,%u,%u,%.2f,%.2f,%.2f,%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.6f,%.2f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.4f\n",
+                      i, idx0, idx1, e0x, e0y, e1x, e1y, m0, m1, a0, a1, ratio, da, P, Q, denom, d1, A, B, beta1, theta, rx, ry, calculated_positions[i].confidence);
     }
 
     return any_solved;
@@ -350,18 +383,17 @@ static bool solvePositions(CalculatedPosition* calculated_positions, ProcessedEm
 
 static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robot) {
     uint32_t calc_start = micros();
-    bool debug_print = true;
 
-    if (debug_print) Serial.println("========== EMAG FRAME DATA ==========");
+    ESP_LOGD(TAG, "========== EMAG FRAME DATA ==========");
     ProcessedEmagData processed_data[EMAG_COUNT];
-    uint8_t valid_emag_count = processEmagReadings(frame, processed_data, debug_print);
-    if (debug_print) Serial.printf("Valid electromagnet readings: %u / %u\n", valid_emag_count, EMAG_COUNT);
+    uint8_t valid_emag_count = processEmagReadings(frame, processed_data);
+    ESP_LOGD(TAG, "Valid electromagnet readings: %u / %u", valid_emag_count, EMAG_COUNT);
 
-    if (debug_print) Serial.println("========== IDENTIFY VALID EMAGS ==========");
+    ESP_LOGD(TAG, "========== IDENTIFY VALID EMAGS ==========");
     CalculatedPosition calculated_positions[3];
     populateEmagIndices(calculated_positions, processed_data, valid_emag_count);
 
-    if (debug_print) Serial.println("========== SOLVE POSITIONS ==========");
+    ESP_LOGD(TAG, "========== SOLVE POSITIONS ==========");
     bool solutions_exist = solvePositions(calculated_positions, processed_data);
 
     if (solutions_exist) {
@@ -380,11 +412,9 @@ static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robo
             sum_sin += c * sinf(calculated_positions[i].ang_rad);
             sum_cos += c * cosf(calculated_positions[i].ang_rad);
 
-            if (debug_print) {
-                Serial.printf("  pair[%u]: pos=(%.1f, %.1f) mm  θ=%.2f rad  conf=%.3f\n",
-                              i, calculated_positions[i].pos_x_mm, calculated_positions[i].pos_y_mm,
-                              calculated_positions[i].ang_rad, c);
-            }
+            ESP_LOGD(TAG, "  pair[%u]: pos=(%.1f, %.1f) mm  theta=%.2f rad  conf=%.3f",
+                          i, calculated_positions[i].pos_x_mm, calculated_positions[i].pos_y_mm,
+                          calculated_positions[i].ang_rad, c);
         }
 
         float inv_conf = 1.0f / sum_conf;
@@ -399,7 +429,7 @@ static bool computePositionFromFrameData(const EmagFrameData* frame, Robot* robo
 
     // Report position calculation time, this is bad if longer than frame length
     uint32_t calc_end = micros();
-    if (debug_print) Serial.printf("Calc time: %lu us\n", calc_end - calc_start);
+    ESP_LOGD(TAG, "Calc time: %lu us", calc_end - calc_start);
     return solutions_exist;
 }
 
@@ -411,11 +441,11 @@ bool PositionEstimator_StartSync(uint16_t timeout_ms) {
 }
 
 void PositionEstimator_SetSyncTime(int64_t sync_time_us) {
-    sync_pulse_time_us = sync_time_us;
-    next_frame_time_us = sync_time_us;
+    sync_pulse_time_us = sync_time_us + EMAG_SAMPLE_TIME_US;
+    next_frame_time_us = sync_pulse_time_us;
     synced = true;
     current_state = STATE_IDLE;
-    Serial.printf("Sync time: {%lu} us\n", sync_time_us);
+    ESP_LOGD(TAG, "Sync time: {%lu} us", sync_time_us);
 }
 
 QueueHandle_t PositionEstimator_GetSyncResultQueue(void) {
@@ -426,13 +456,13 @@ void PositionEstimator_SensorTask(void* pvParameters) {
     vTaskDelay(pdMS_TO_TICKS(100));
 
     if (emag_frame_queue == NULL) {
-        Serial.println("ERROR: emag_frame_queue not initialized");
+        ESP_LOGE(TAG, "emag_frame_queue not initialized");
         vTaskDelete(NULL);
         return;
     }
 
     if (!mag.enableContinuousMode()) {
-        Serial.println("ERROR: Failed to enable continuous mode");
+        ESP_LOGE(TAG, "Failed to enable continuous mode");
         vTaskDelete(NULL);
         return;
     }
@@ -490,14 +520,14 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                         memset(&current_frame, 0, sizeof(current_frame));
                         synced = true;
                         current_state = STATE_IDLE;
-                        Serial.printf("Sync pulse detected at %lu us\n", sync_pulse_time_us);
+                        ESP_LOGD(TAG, "Sync pulse detected at %lu us", sync_pulse_time_us);
                         PosSyncResult result;
                         result.detected = true;
                         xQueueOverwrite(sync_result_queue, &result);
                     } else if ((current_micros - sync_deadline_us) >= 0) {
-                        Serial.println("Start pulse NOT detected");
+                        ESP_LOGW(TAG, "Start pulse NOT detected");
                         current_state = STATE_SYNC_LOST;
-                        Serial.println("Sync timeout - no pulse detected");
+                        ESP_LOGW(TAG, "Sync timeout - no pulse detected");
                         PosSyncResult result;
                         result.detected = false;
                         xQueueOverwrite(sync_result_queue, &result);
@@ -563,7 +593,7 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                         // TODO make sure SR is run every 1s even if no state changes
                         if (!set_reset_done && delay_ms > 5) {
                             if (!mag.setReset()) {
-                                Serial.println("WARNING: Magnetometer set/reset failed");
+                                ESP_LOGW(TAG, "Magnetometer set/reset failed");
                             }
                             set_reset_done = true;
                             loop_delay_ms = 0;
@@ -604,7 +634,7 @@ void PositionEstimator_CalcTask(void* pvParameters) {
     Robot* robot = (Robot*)pvParameters;
 
     if (robot == NULL || emag_frame_queue == NULL) {
-        Serial.println("ERROR: PositionEstimator_CalcTask bad parameters");
+        ESP_LOGE(TAG, "PositionEstimator_CalcTask bad parameters");
         vTaskDelete(NULL);
         return;
     }

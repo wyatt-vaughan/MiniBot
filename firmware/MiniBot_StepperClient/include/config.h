@@ -102,11 +102,22 @@
 #define ESP_NOW_COMM_PRIORITY       4       // High priority
 
 // ============================================================================
-// Debug Configuration
+// Logging Configuration
 // ============================================================================
+// Log levels: NONE=0, ERROR=1, WARN=2, INFO=3, DEBUG=4, VERBOSE=5
+// Set to DEBUG (4) to enable verbose debug output for a component.
+// Set to INFO (3) for normal operation.
 
-#define MOTION_DEBUG_LOGGING        true    // Enable detailed motion control debug output
-#define SPAM_POSITION               false
+#define LOG_LEVEL_MAIN        3
+#define LOG_LEVEL_BATTERY     3
+#define LOG_LEVEL_DEVICE_ID   3
+#define LOG_LEVEL_ESPNOW      3
+#define LOG_LEVEL_KINEMATICS  3
+#define LOG_LEVEL_POS_EST     3
+#define LOG_LEVEL_MMC5633     3
+#define LOG_LEVEL_ROBOT       3
+
+#define SPAM_POSITION               true
 #define ENABLE_BOT_WHILE_CHARGING   true
 
 // ============================================================================
@@ -126,6 +137,7 @@
 
 // Sampling
 #define EMAG_MIN_SAMPLE_PERIOD_US    900   // 1 kHz sampling period, set faster to avoid missed readings (µs)
+#define EMAG_SAMPLE_TIME_US          1200  // How long samples take to collect on the sensor
 #define MAX_SAMPLES_PER_EMAG         ((EMAG_FWD_ON_TIME_MS + EMAG_REV_ON_TIME_MS) * 1000 / EMAG_MIN_SAMPLE_PERIOD_US)
 
 // Detection thresholds

@@ -2,13 +2,12 @@
 #include <Arduino.h>
 #include <cmath>
 #include <driver/rmt.h>
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_ROBOT
+#include "esp_log.h"
+#include "config.h"
 
-// Debug logging macro
-#if MOTION_DEBUG_LOGGING
-#define MOTION_LOG(...) Serial.printf(__VA_ARGS__)
-#else
-#define MOTION_LOG(...) ((void)0)
-#endif
+static const char* TAG = "ROBOT";
 
 // Motor test RMT channels for precise stepping
 static rmt_channel_t motor_test_m0_rmt_channel = RMT_CHANNEL_0;
@@ -270,9 +269,9 @@ void Robot::executeMotionLoop(int32_t total_steps, float base_step_time_us,
                                float max_velocity_mm_s, const MotionProfile& profile,
                                TickType_t start_tick, TickType_t target_end_tick,
                                std::function<void(int32_t)> step_callback) {
-    MOTION_LOG("    executeMotionLoop: total_steps=%ld, base_step_time=%.2f us, max_vel=%.2f mm/s\n", 
+    ESP_LOGD(TAG, "    executeMotionLoop: total_steps=%ld, base_step_time=%.2f us, max_vel=%.2f mm/s", 
                total_steps, base_step_time_us, max_velocity_mm_s);
-    MOTION_LOG("    Profile: accel_phase=%.2f ms, full_profile=%s\n", 
+    ESP_LOGD(TAG, "    Profile: accel_phase=%.2f ms, full_profile=%s", 
                profile.accel_phase_ms, profile.full_profile ? "YES" : "NO");
     
     TickType_t current_tick;
@@ -376,7 +375,7 @@ static Robot::WheelMotion calculateWheelProfile(float distance_mm, float target_
     
     m.total_time_s = 2.0f * m.accel_time_s + m.cruise_time_s;
     
-    MOTION_LOG("    WheelProfile: d=%.1f mm, target=%.0f ms, actual=%.0f ms, v=%.1f mm/s, %s\n",
+    ESP_LOGD(TAG, "    WheelProfile: d=%.1f mm, target=%.0f ms, actual=%.0f ms, v=%.1f mm/s, %s",
                d, target_time_s * 1000, m.total_time_s * 1000, m.max_velocity_mm_s,
                m.is_triangular ? "TRI" : "TRAP");
     
@@ -425,10 +424,10 @@ void Robot::setTargetPose(MotionCommand target) {
     float linear_distance = sqrt(dx * dx + dy * dy);
     float angle_delta = normalizeAngle(target_theta - current_theta);
     
-    MOTION_LOG("\n=== Motion Command ===\n");
-    MOTION_LOG("From: (%.1f, %.1f, %.2f rad)\n", current_x, current_y, current_theta);
-    MOTION_LOG("To:   (%.1f, %.1f, %.2f rad)\n", target_x, target_y, target_theta);
-    MOTION_LOG("Delta: d=%.1f mm, a=%.2f rad, t=%.0f ms\n", linear_distance, angle_delta, move_duration_s * 1000);
+    ESP_LOGD(TAG, "\n=== Motion Command ===");
+    ESP_LOGD(TAG, "From: (%.1f, %.1f, %.2f rad)", current_x, current_y, current_theta);
+    ESP_LOGD(TAG, "To:   (%.1f, %.1f, %.2f rad)", target_x, target_y, target_theta);
+    ESP_LOGD(TAG, "Delta: d=%.1f mm, a=%.2f rad, t=%.0f ms", linear_distance, angle_delta, move_duration_s * 1000);
     
     // Enable motors
     left_wheel.enable();
@@ -443,11 +442,11 @@ void Robot::setTargetPose(MotionCommand target) {
     if (position_match && angle_match) {
         // Already at target
         motion_type = MotionType::NONE;
-        MOTION_LOG("Type: NONE (already at target)\n");
+        ESP_LOGD(TAG, "Type: NONE (already at target)");
     } else if (position_match) {
         // Only rotation needed
         motion_type = MotionType::ROTATION_ONLY;
-        MOTION_LOG("Type: ROTATION_ONLY\n");
+        ESP_LOGD(TAG, "Type: ROTATION_ONLY");
     } else {
         // Position change required - check if straight line is possible
         float heading_to_target = atan2(dy, dx);
@@ -456,13 +455,13 @@ void Robot::setTargetPose(MotionCommand target) {
         // Straight line possible if heading matches (forward or backward)
         if (fabs(heading_error) < ANGLE_TOLERANCE_RAD) {
             motion_type = MotionType::STRAIGHT_LINE;
-            MOTION_LOG("Type: STRAIGHT_LINE (forward)\n");
+            ESP_LOGD(TAG, "Type: STRAIGHT_LINE (forward)");
         } else if (fabs(fabs(heading_error) - M_PI) < ANGLE_TOLERANCE_RAD) {
             motion_type = MotionType::STRAIGHT_LINE;
-            MOTION_LOG("Type: STRAIGHT_LINE (backward)\n");
+            ESP_LOGD(TAG, "Type: STRAIGHT_LINE (backward)");
         } else {
             motion_type = MotionType::ARC_THEN_ROTATE;
-            MOTION_LOG("Type: ARC_THEN_ROTATE\n");
+            ESP_LOGD(TAG, "Type: ARC_THEN_ROTATE");
         }
     }
     
@@ -509,7 +508,7 @@ void Robot::setTargetPose(MotionCommand target) {
     vTaskDelay(pdMS_TO_TICKS(5));
     
     uint32_t elapsed = millis() - start_time;
-    MOTION_LOG("Motion complete in %lu ms\n", elapsed);
+    ESP_LOGD(TAG, "Motion complete in %lu ms", elapsed);
     
     // Update position
     positionX = target_x;
@@ -531,7 +530,7 @@ void Robot::executeRotation(float angle_rad, float target_time_s) {
     // Choose shorter rotation direction
     angle_rad = normalizeAngle(angle_rad);
     
-    MOTION_LOG("  Rotation: %.2f rad (%.1f deg) in %.0f ms\n", 
+    ESP_LOGD(TAG, "  Rotation: %.2f rad (%.1f deg) in %.0f ms", 
                angle_rad, angle_rad * 180.0f / M_PI, target_time_s * 1000);
     
     // Arc length each wheel travels (opposite directions)
@@ -551,7 +550,7 @@ void Robot::executeRotation(float angle_rad, float target_time_s) {
     left_wheel.setDirection(cw);   // left goes forward for CW
     right_wheel.setDirection(!cw); // right goes backward for CW
     
-    MOTION_LOG("  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld\n",
+    ESP_LOGD(TAG, "  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld",
                profile.max_velocity_mm_s, profile.total_time_s * 1000, profile.total_steps);
     
     // Execute motion: compare integrated expected distance to actual, step when behind
@@ -584,7 +583,7 @@ void Robot::executeRotation(float angle_rad, float target_time_s) {
 void Robot::executeStraightLine(float distance_mm, float target_time_s) {
     if (fabs(distance_mm) < 0.1f) return;
     
-    MOTION_LOG("  Straight: %.1f mm in %.0f ms\n", distance_mm, target_time_s * 1000);
+    ESP_LOGD(TAG, "  Straight: %.1f mm in %.0f ms", distance_mm, target_time_s * 1000);
     
     float steps_per_mm = steps_per_revolution / (2.0f * M_PI * wheel_radius_mm);
     
@@ -599,7 +598,7 @@ void Robot::executeStraightLine(float distance_mm, float target_time_s) {
     left_wheel.setDirection(forward);
     right_wheel.setDirection(forward);
     
-    MOTION_LOG("  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld, %s\n",
+    ESP_LOGD(TAG, "  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld, %s",
                profile.max_velocity_mm_s, profile.total_time_s * 1000, 
                profile.total_steps, forward ? "FWD" : "REV");
     
@@ -651,9 +650,9 @@ void Robot::executeArcToPosition(float dx, float dy, float current_theta,
     // Calculate remaining rotation needed after arc
     float rotation_after_arc = normalizeAngle(final_angle_delta - arc_angle);
     
-    MOTION_LOG("  ArcToPos: d=%.1f mm, heading_err=%.2f rad, arc_angle=%.2f rad\n", 
+    ESP_LOGD(TAG, "  ArcToPos: d=%.1f mm, heading_err=%.2f rad, arc_angle=%.2f rad", 
                linear_distance, heading_error, arc_angle);
-    MOTION_LOG("  Will end facing %.2f rad, need rotation %.2f rad after\n",
+    ESP_LOGD(TAG, "  Will end facing %.2f rad, need rotation %.2f rad after",
                ending_theta, rotation_after_arc);
     
     // Calculate arc radius: R = d / (2 * sin(heading_error))
@@ -717,7 +716,7 @@ void Robot::executeArcToPosition(float dx, float dy, float current_theta,
         }
     }
     
-    MOTION_LOG("  Arc r=%.1f, left=%.1f mm (%s), right=%.1f mm (%s)\n", 
+    ESP_LOGD(TAG, "  Arc r=%.1f, left=%.1f mm (%s), right=%.1f mm (%s)", 
                arc_radius, left_distance, left_forward ? "fwd" : "rev",
                right_distance, right_forward ? "fwd" : "rev");
     
@@ -759,8 +758,8 @@ void Robot::executeArcToPosition(float dx, float dy, float current_theta,
     left_wheel.setDirection(left_forward);
     right_wheel.setDirection(right_forward);
     
-    MOTION_LOG("  Left:  v=%.1f mm/s, steps=%ld\n", left_profile.max_velocity_mm_s, left_profile.total_steps);
-    MOTION_LOG("  Right: v=%.1f mm/s, steps=%ld\n", right_profile.max_velocity_mm_s, right_profile.total_steps);
+    ESP_LOGD(TAG, "  Left:  v=%.1f mm/s, steps=%ld", left_profile.max_velocity_mm_s, left_profile.total_steps);
+    ESP_LOGD(TAG, "  Right: v=%.1f mm/s, steps=%ld", right_profile.max_velocity_mm_s, right_profile.total_steps);
     
     // Execute with independent wheel timing
     uint32_t start_us = micros();
@@ -808,7 +807,7 @@ void Robot::executeArcToPosition(float dx, float dy, float current_theta,
         if (elapsed_s > motion_time_s + 1.0f) break;
     }
     
-    MOTION_LOG("  Arc complete: L=%ld/%ld, R=%ld/%ld steps\n",
+    ESP_LOGD(TAG, "  Arc complete: L=%ld/%ld, R=%ld/%ld steps",
                left_steps_done, left_profile.total_steps,
                right_steps_done, right_profile.total_steps);
     
@@ -873,7 +872,7 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
         
         esp_err_t err = rmt_config(&rmt_cfg);
         if (err != ESP_OK) {
-            Serial.printf("ERROR: RMT M0 config failed: %d\n", err);
+            ESP_LOGE(TAG, "RMT M0 config failed: %d", err);
             return;
         }
         
@@ -881,7 +880,7 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
         if (!motor_test_m0_driver_installed) {
             err = rmt_driver_install(motor_test_m0_rmt_channel, 0, 0);
             if (err != ESP_OK) {
-                Serial.printf("ERROR: RMT M0 driver install failed: %d\n", err);
+                ESP_LOGE(TAG, "RMT M0 driver install failed: %d", err);
                 return;
             }
             motor_test_m0_driver_installed = true;
@@ -901,13 +900,13 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
         
         err = rmt_write_items(motor_test_m0_rmt_channel, &pulse, 1, false);
         if (err != ESP_OK) {
-            Serial.printf("ERROR: RMT M0 write_items failed: %d\n", err);
+            ESP_LOGE(TAG, "RMT M0 write_items failed: %d", err);
             return;
         }
         
         err = rmt_tx_start(motor_test_m0_rmt_channel, true);
         if (err != ESP_OK) {
-            Serial.printf("ERROR: RMT M0 tx_start failed: %d\n", err);
+            ESP_LOGE(TAG, "RMT M0 tx_start failed: %d", err);
             return;
         }
         
@@ -936,7 +935,7 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
         
         esp_err_t err = rmt_config(&rmt_cfg);
         if (err != ESP_OK) {
-            Serial.printf("ERROR: RMT M1 config failed: %d\n", err);
+            ESP_LOGE(TAG, "RMT M1 config failed: %d", err);
             return;
         }
         
@@ -944,7 +943,7 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
         if (!motor_test_m1_driver_installed) {
             err = rmt_driver_install(motor_test_m1_rmt_channel, 0, 0);
             if (err != ESP_OK) {
-                Serial.printf("ERROR: RMT M1 driver install failed: %d\n", err);
+                ESP_LOGE(TAG, "RMT M1 driver install failed: %d", err);
                 return;
             }
             motor_test_m1_driver_installed = true;
@@ -964,13 +963,13 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
         
         err = rmt_write_items(motor_test_m1_rmt_channel, &pulse, 1, false);
         if (err != ESP_OK) {
-            Serial.printf("ERROR: RMT M1 write_items failed: %d\n", err);
+            ESP_LOGE(TAG, "RMT M1 write_items failed: %d", err);
             return;
         }
         
         err = rmt_tx_start(motor_test_m1_rmt_channel, true);
         if (err != ESP_OK) {
-            Serial.printf("ERROR: RMT M1 tx_start failed: %d\n", err);
+            ESP_LOGE(TAG, "RMT M1 tx_start failed: %d", err);
             return;
         }
         

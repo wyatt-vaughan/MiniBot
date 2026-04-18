@@ -1,8 +1,13 @@
 #include "esp_now_communicator.h"
 #include "device_id.h"
 #include "position_estimator.h"
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_ESPNOW
+#include "esp_log.h"
 #include "config.h"
 #include <cmath>
+
+static const char* TAG = "ESPNOW";
 
 static MotionQueue comm_queue = NULL;
 static MotorTestQueue motor_test_queue = NULL;
@@ -36,10 +41,10 @@ bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test
     
     WiFi.mode(WIFI_STA);
     delay(100);
-    Serial.printf("WiFi MAC: %s\n", WiFi.macAddress().c_str());
+    ESP_LOGD(TAG, "WiFi MAC: %s", WiFi.macAddress().c_str());
     
     if (esp_now_init() != ESP_OK) {
-        Serial.println("ERROR: ESP-NOW initialization failed");
+        ESP_LOGE(TAG, "ESP-NOW initialization failed");
         return false;
     }
     
@@ -52,11 +57,11 @@ bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test
     peer.channel = WIFI_CHANNEL;
     
     if (esp_now_add_peer(&peer) != ESP_OK) {
-        Serial.println("WARNING: Failed to add broadcast peer");
+        ESP_LOGW(TAG, "Failed to add broadcast peer");
     }
     
     EspNowCommunicator_RegisterCallback(esp_now_message_handler);
-    Serial.println("ESP-NOW ready");
+    ESP_LOGI(TAG, "ESP-NOW ready");
     return true;
 }
 
@@ -94,7 +99,7 @@ static bool ensure_peer_exists(const uint8_t *mac_addr) {
         
         esp_err_t add_result = esp_now_add_peer(&peer_info);
         if (add_result != ESP_OK) {
-            Serial.printf("ERROR: Failed to add peer (error: %d)\n", add_result);
+            ESP_LOGE(TAG, "Failed to add peer (error: %d)", add_result);
             return false;
         }
     }
@@ -134,7 +139,7 @@ static bool send_ack_message(const uint8_t *mac_addr) {
     
     esp_err_t result = esp_now_send(mac_addr, (uint8_t*)&ack, sizeof(AckMessage));
     if (result != ESP_OK) {
-        Serial.printf("ERROR: Failed to send ack (err: %d)\n", result);
+        ESP_LOGE(TAG, "Failed to send ack (err: %d)", result);
         return false;
     }
     return true;
@@ -160,7 +165,7 @@ static bool send_nack_message(const uint8_t *mac_addr, const uint8_t error_type)
     
     esp_err_t result = esp_now_send(mac_addr, (uint8_t*)&nack, sizeof(NackMessage));
     if (result != ESP_OK) {
-        Serial.printf("ERROR: Failed to send nack (err: %d)\n", result);
+        ESP_LOGE(TAG, "Failed to send nack (err: %d)", result);
         return false;
     }
     return true;
@@ -173,7 +178,7 @@ static bool send_mag_field_response(const uint8_t *mac_addr) {
     
     float x, y, z;
     if (!PositionEstimator_GetLatestMagneticField(&x, &y, &z)) {
-        Serial.println("ERROR: Could not retrieve magnetometer readings");
+        ESP_LOGW(TAG, "Could not retrieve magnetometer readings");
         return send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
     }
     
@@ -191,7 +196,7 @@ static bool send_mag_field_response(const uint8_t *mac_addr) {
     
     esp_err_t result = esp_now_send(mac_addr, (uint8_t*)&response, sizeof(MagneticFieldResponse));
     if (result != ESP_OK) {
-        Serial.printf("ERROR: Failed to send mag field response (err: %d)\n", result);
+        ESP_LOGE(TAG, "Failed to send mag field response (err: %d)", result);
         return false;
     }
     return true;
@@ -199,7 +204,7 @@ static bool send_mag_field_response(const uint8_t *mac_addr) {
 
 static void send_completion_ack_if_pending() {
     if (has_pending_completion_ack) {
-        Serial.println("Sending motion completion acknowledgment");
+        ESP_LOGD(TAG, "Sending motion completion acknowledgment");
         send_ack_message(last_sender_mac);
         has_pending_completion_ack = false;
     }
@@ -219,18 +224,18 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
 
     if (!station_mac_established) {
         if (!record_station_mac(mac_addr)) {
-            Serial.println("ERROR: Failed to record station MAC address");
+            ESP_LOGE(TAG, "Failed to record station MAC address");
             return;
         }
-        Serial.printf("Recorded station MAC: %02X:%02X:%02X:%02X:%02X:%02X\n", 
-                    last_sender_mac[0], last_sender_mac[1], last_sender_mac[2], 
+        ESP_LOGD(TAG, "Recorded station MAC: %02X:%02X:%02X:%02X:%02X:%02X",
+                    last_sender_mac[0], last_sender_mac[1], last_sender_mac[2],
                     last_sender_mac[3], last_sender_mac[4], last_sender_mac[5]);
     }
     
     switch (msg_type) {
         case MSG_TYPE_POSITION_COMMAND: {
             if (len < sizeof(PositionCommand)) {
-                Serial.printf("ERROR: PositionCommand too short\n");
+                ESP_LOGE(TAG, "PositionCommand too short");
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
@@ -247,7 +252,7 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 has_pending_completion_ack = true;
                 send_ack_message(mac_addr);
             } else {
-                Serial.println("ERROR: Motion queue full");
+                ESP_LOGE(TAG, "Motion queue full");
                 send_nack_message(mac_addr, ERR_QUEUE_FULL);
             }
             break;
@@ -255,7 +260,7 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
         
         case MSG_TYPE_MOT_TEST_COMMAND: {
             if (len < sizeof(MotTestCommand)) {
-                Serial.println("ERROR: MotTestCommand too short");
+                ESP_LOGE(TAG, "MotTestCommand too short");
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
@@ -273,18 +278,18 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
                 };
                 
                 if (MotorTestQueue_Enqueue(motor_test_queue, &motor_req)) {
-                    Serial.printf("Motor test command queued: M0=%.2f rad/s, M1=%.2f rad/s\n", 
+                    ESP_LOGD(TAG, "Motor test command queued: M0=%.2f rad/s, M1=%.2f rad/s",
                                 m0_vel_rad_s, m1_vel_rad_s);
                     // send_ack_message(mac_addr);
                 } else {
-                    Serial.println("ERROR: Motor test queue full");
+                    ESP_LOGE(TAG, "Motor test queue full");
                     // send_nack_message(mac_addr, ERR_QUEUE_FULL);
                 }
             } else {
                 // Stop motor test - send immediate stop signal via zero velocity command
                 MotorTestRequest motor_req = {0.0f, 0.0f};
                 MotorTestQueue_Enqueue(motor_test_queue, &motor_req);
-                Serial.println("Motor test stop command queued");
+                ESP_LOGD(TAG, "Motor test stop command queued");
                 // send_ack_message(mac_addr);
             }
             break;
@@ -292,13 +297,13 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
         
         case MSG_TYPE_POSITION_REQUEST: {
             if (len < sizeof(PositionRequest)) {
-                Serial.println("ERROR: PositionRequest too short");
+                ESP_LOGE(TAG, "PositionRequest too short");
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
             
             if (g_robot_ptr == NULL) {
-                Serial.println("ERROR: Robot pointer unavailable");
+                ESP_LOGE(TAG, "Robot pointer unavailable");
                 send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
                 return;
             }
@@ -309,34 +314,34 @@ static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data
         
         case MSG_TYPE_ACK_MESSAGE: {
             if (len < sizeof(AckMessage)) {
-                Serial.println("ERROR: AckMessage too short");
+                ESP_LOGE(TAG, "AckMessage too short");
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
-            Serial.println("Received acknowledgment message");
+            ESP_LOGD(TAG, "Received acknowledgment message");
             send_nack_message(mac_addr, ERR_NOT_IMPLEMENTED);
             break;
         }
         
         case MSG_TYPE_MAG_REQUEST: {
             if (len < sizeof(MagneticFieldRequest)) {
-                Serial.println("ERROR: MagneticFieldRequest too short");
+                ESP_LOGE(TAG, "MagneticFieldRequest too short");
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
-            Serial.println("Received magnetometer field request");
+            ESP_LOGD(TAG, "Received magnetometer field request");
             send_mag_field_response(mac_addr);
             break;
         }
 
         case MSG_TYPE_POS_SYNC_COMMAND: {
             if (len < sizeof(PosSyncCommand)) {
-                Serial.println("ERROR: PosSyncCommand too short");
+                ESP_LOGE(TAG, "PosSyncCommand too short");
                 send_nack_message(mac_addr, ERR_INVALID_MSG_SIZE);
                 return;
             }
             if (waiting_for_pos_sync) {
-                Serial.println("ERROR: PosSync wait already in progress");
+                ESP_LOGW(TAG, "PosSync wait already in progress");
                 send_nack_message(mac_addr, ERR_ROBOT_UNAVAILABLE);
                 return;
             }
@@ -387,7 +392,7 @@ bool EspNowCommunicator_SendAlert(uint8_t error_type) {
     }
     
     if (!has_valid_sender) {
-        Serial.println("WARNING: No valid sender MAC for alert");
+        ESP_LOGW(TAG, "No valid sender MAC for alert");
         return false;
     }
     
@@ -417,14 +422,14 @@ void EspNowCommunicator_Task(void* pvParameters) {
             }
 
             if (pos_sync_received) {
-                Serial.println(pos_sync_best_receive_time_us);
-                // PositionEstimator_SetSyncTime(pos_sync_best_receive_time_us);
+                // Serial.println(pos_sync_best_receive_time_us);
+                PositionEstimator_SetSyncTime(pos_sync_best_receive_time_us);
 
                 // Random delay to spread acks from multiple robots
                 vTaskDelay(pdMS_TO_TICKS(esp_random() % 101));
                 send_ack_message(last_sender_mac);
             } else {
-                Serial.println("PosSync timeout — no MSG_TYPE_POS_SYNC received");
+                ESP_LOGW(TAG, "PosSync timeout -- no MSG_TYPE_POS_SYNC received");
                 send_nack_message(last_sender_mac, ERR_SYNC_TIMEOUT);
             }
 

@@ -1,8 +1,13 @@
 #include "kinematics_controller.h"
 #include "esp_now_communicator.h"
 #include "motor_test_queue.h"
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_KINEMATICS
+#include "esp_log.h"
 #include "config.h"
 #include <Arduino.h>
+
+static const char* TAG = "KINEMATICS";
 
 static MotionQueue kinematics_queue = NULL;
 static MotorTestQueue motor_test_queue = NULL;
@@ -68,7 +73,7 @@ void KinematicsController_Task(void* pvParameters) {
         float true_x, true_y, true_theta;
         bool valid_pose = robot->getTruePose(&true_x, &true_y, &true_theta);
         if (valid_pose) {
-            Serial.printf("TRUE POSE: X=%.1f mm\tY=%.1f mm\tθ=%.2f rad\n", true_x, true_y, true_theta);
+            ESP_LOGD(TAG, "TRUE POSE: X=%.1f mm  Y=%.1f mm  theta=%.2f rad", true_x, true_y, true_theta);
         }
 
         if (MotorTestQueue_Dequeue(motor_test_queue, &motor_test_buffer, 10)) {
@@ -76,7 +81,7 @@ void KinematicsController_Task(void* pvParameters) {
             current_m0_velocity_rad_s = motor_test_buffer.m0_velocity_rad_s;
             current_m1_velocity_rad_s = motor_test_buffer.m1_velocity_rad_s;
             
-            Serial.printf("Kinematics: Motor test command - M0=%.2f rad/s, M1=%.2f rad/s\n",
+            ESP_LOGD(TAG, "Motor test command - M0=%.2f rad/s, M1=%.2f rad/s",
                         current_m0_velocity_rad_s, current_m1_velocity_rad_s);
             
             if (current_m0_velocity_rad_s == 0.0f && current_m1_velocity_rad_s == 0.0f) {
@@ -90,14 +95,14 @@ void KinematicsController_Task(void* pvParameters) {
         
         // Check for motor test timeout
         if (motor_test_active && (current_us - last_motor_test_command_us) > (MOTOR_TEST_TIMEOUT_MS * 1000)) {
-            Serial.println("Motor test timeout - stopping motors");
+            ESP_LOGD(TAG, "Motor test timeout - stopping motors");
             motor_test_active = false;
             robot->stopMotorTest();
         }
         
         // Block waiting for motion command with 100ms timeout
         if (MotionQueue_Dequeue(kinematics_queue, &cmd_buffer, 100)) {
-            Serial.println("Kinematics controller: Received motion command");
+            ESP_LOGD(TAG, "Received motion command");
 
             // Stop motor test if motion command received
             if (motor_test_active) {
@@ -107,9 +112,9 @@ void KinematicsController_Task(void* pvParameters) {
             
             // tbd if I want to move this before the dequeue or not
             if (robot->getBatteryCritical()) {
-                Serial.println("WARNING: Battery voltage critical, ignoring motion command");
+                ESP_LOGW(TAG, "Battery voltage critical, ignoring motion command");
                 if (!EspNowCommunicator_SendAlert(ERR_LOW_BATTERY)) {
-                    Serial.println("Failed to send low battery alert");
+                    ESP_LOGE(TAG, "Failed to send low battery alert");
                 }
                 continue;
             }

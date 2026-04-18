@@ -1,6 +1,11 @@
 #include "battery_monitor.h"
 #include "esp_now_communicator.h"
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_BATTERY
+#include "esp_log.h"
 #include "config.h"
+
+static const char* TAG = "BATTERY";
 
 static uint8_t battery_adc_pin = 0;
 static RollingAverage<BATTERY_AVG_WINDOW_SIZE> battery_avg_v;
@@ -39,13 +44,13 @@ void BatteryMonitor_Task(void* pvParameters) {
         // Check for low battery condition and send alert
         if (robot->getBatteryCritical()) {
             if (!low_battery_alerted) {
-                Serial.printf("LOW BATTERY DETECTED: %.2fV\n", 
+                ESP_LOGW(TAG, "LOW BATTERY DETECTED: %.2fV",
                               current_voltage);
                 if (EspNowCommunicator_SendAlert(ERR_LOW_BATTERY)) {
-                    Serial.println("Low battery alert sent successfully");
+                    ESP_LOGI(TAG, "Low battery alert sent successfully");
                     low_battery_alerted = true;
                 } else {
-                    Serial.println("Failed to send low battery alert");
+                    ESP_LOGE(TAG, "Failed to send low battery alert");
                 }
             }
         } else {
@@ -57,7 +62,7 @@ void BatteryMonitor_Task(void* pvParameters) {
                               (!ENABLE_BOT_WHILE_CHARGING && robot->getBatteryCharging());
 
         if (should_suspend && !tasks_suspended) {
-            Serial.printf("Battery condition (%.2fV) requires suspending tasks.\n", current_voltage);
+            ESP_LOGW(TAG, "Battery condition (%.2fV) requires suspending tasks.", current_voltage);
             robot->disableMotors();
             if (params->kinematics_task != NULL)              vTaskSuspend(params->kinematics_task);
             if (params->communicator_task != NULL)            vTaskSuspend(params->communicator_task);
@@ -65,7 +70,7 @@ void BatteryMonitor_Task(void* pvParameters) {
             if (params->position_estimator_calc_task != NULL)  vTaskSuspend(params->position_estimator_calc_task);
             tasks_suspended = true;
         } else if (!should_suspend && tasks_suspended) {
-            Serial.printf("Battery voltage (%.2fV) recovered. Resuming tasks.\n", current_voltage);
+            ESP_LOGI(TAG, "Battery voltage (%.2fV) recovered. Resuming tasks.", current_voltage);
             if (params->kinematics_task != NULL)              vTaskResume(params->kinematics_task);
             if (params->communicator_task != NULL)            vTaskResume(params->communicator_task);
             if (params->position_estimator_sensor_task != NULL) vTaskResume(params->position_estimator_sensor_task);

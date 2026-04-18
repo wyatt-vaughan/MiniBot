@@ -6,7 +6,6 @@ TaskHandle_t emagTaskHandle = NULL;
 
 // Control flags
 volatile bool emagEnabled = false;
-volatile bool syncPulseRequested = false;
 volatile int64_t nextFrameStartUs = 0;
 
 // Initialize electromagnets
@@ -67,12 +66,6 @@ bool getElectromagnetEnabled() {
   return emagEnabled;
 }
 
-// Request a one-shot 3ms sync pulse at the start of the next emag frame
-void triggerSyncPulse() {
-  syncPulseRequested = true;
-  DEBUG_PRINTLN("Sync pulse requested");
-}
-
 // Returns microseconds until the start of the next emag frame
 uint32_t getTimeToNextFrameUs() {
   const int64_t frameLenUs = (int64_t)EMAG_FRAME_LEN_MS * 1000LL;
@@ -96,38 +89,6 @@ static bool waitUntilUs(int64_t targetUs) {
   return true;
 }
 
-// --- Emag timing benchmark ---
-// Steps per frame: EMAG_COUNT * 4  (fwd ON, gap, rev ON, gap  x  each emag)
-#define BENCH_STEPS  (EMAG_COUNT * 4)
-#define BENCH_FRAMES 10
-
-static int64_t benchMin[BENCH_STEPS];
-static int64_t benchMax[BENCH_STEPS];
-static int     benchFrameCount = 0;
-static bool    benchInitialized = false;
-
-// Record a timestamp (ns relative to frame start) for step index s.
-static inline void benchRecord(int s, int64_t frameStartUs) {
-  int64_t nowUs = esp_timer_get_time();
-  int64_t relUs = nowUs - frameStartUs;
-  if (!benchInitialized || relUs < benchMin[s]) benchMin[s] = relUs;
-  if (!benchInitialized || relUs > benchMax[s]) benchMax[s] = relUs;
-}
-
-static void benchPrintAndReset() {
-  DEBUG_PRINTF("\n=== Emag timing benchmark (last %d frames) ===\n", BENCH_FRAMES);
-  for (int i = 0; i < EMAG_COUNT; i++) {
-    int base = i * 4;
-    DEBUG_PRINTF("  emag%d  fwd ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+0], benchMax[base+0]);
-    DEBUG_PRINTF("  emag%d  gap1   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+1], benchMax[base+1]);
-    DEBUG_PRINTF("  emag%d  rev ON : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+2], benchMax[base+2]);
-    DEBUG_PRINTF("  emag%d  gap2   : min=%6lld µs  max=%6lld µs\n", i, benchMin[base+3], benchMax[base+3]);
-  }
-  DEBUG_PRINTLN("==============================================\n");
-  benchFrameCount  = 0;
-  benchInitialized = false;
-}
-
 // FreeRTOS electromagnet task
 void electromagnetTask(void *parameter) {
   DEBUG_PRINTLN("Electromagnet Task started");
@@ -141,47 +102,32 @@ void electromagnetTask(void *parameter) {
       DEBUG_PRINTLN("Frame skipped: overrun at frame start");
       continue;
     }
+    if (!emagEnabled) {
+      continue;
+    }
 
     // --- Frame start ---
+    const int64_t fwdOnUs = (int64_t)EMAG_FWD_ON_TIME_MS * 1000LL;
+    const int64_t revOnUs = (int64_t)EMAG_REV_ON_TIME_MS * 1000LL;
+    int64_t interFrameTimeUs = nextFrameStartUs;
 
-    // Sync pulse: fire all emags for 3ms to sync frame start
-    if (syncPulseRequested) {
-      syncPulseRequested = false;
-      setAllElectromagnets(true, true);  // forward pulse for sync
-      waitUntilUs(nextFrameStartUs + 3000LL);
-      setAllElectromagnets(false);
-      DEBUG_PRINTLN("Sync pulse fired (3ms)");
-    }
-    else if (emagEnabled) {
-      const int64_t fwdOnUs = (int64_t)EMAG_FWD_ON_TIME_MS * 1000LL;
-      const int64_t revOnUs = (int64_t)EMAG_REV_ON_TIME_MS * 1000LL;
-
-      int64_t interFrameTimeUs = nextFrameStartUs;
-
-      for (int i = 0; i < EMAG_COUNT && emagEnabled; i++) {
-        int base = i * 2;
-
-        // Forward ON
-        benchRecord(base + 0, nextFrameStartUs);
-        setElectromagnet(i, true, true);
-        interFrameTimeUs += fwdOnUs;
-        waitUntilUs(interFrameTimeUs);
-
-        // Reverse ON
-        benchRecord(base + 1, nextFrameStartUs);
-        setElectromagnet(i, true, false);
-        interFrameTimeUs += revOnUs;
-        waitUntilUs(interFrameTimeUs);
-
-        // OFF
-        setElectromagnet(i, false);
+    for (int i = 0; i < EMAG_COUNT && emagEnabled; i++) {
+      // Forward ON
+      setElectromagnet(i, true, true);
+      interFrameTimeUs += fwdOnUs;
+      if(!waitUntilUs(interFrameTimeUs)) {
+        DEBUG_PRINTLN("WARNING: Timing overrun before reverse ON");
       }
 
-      benchInitialized = true;
-      benchFrameCount++;
-      if (benchFrameCount >= BENCH_FRAMES) {
-        benchPrintAndReset();
+      // Reverse ON
+      setElectromagnet(i, true, false);
+      interFrameTimeUs += revOnUs;
+      if(!waitUntilUs(interFrameTimeUs)) {
+        DEBUG_PRINTLN("WARNING: Timing overrun before OFF");
       }
+
+      // OFF
+      setElectromagnet(i, false);
     }
 
     // Ensure all emags are off at the end of the frame

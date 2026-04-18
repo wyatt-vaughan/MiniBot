@@ -3,6 +3,9 @@ A FreeRTOS powered controller for a tiny 2 wheel robot.
 */
 
 #include <Arduino.h>
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_MAIN
+#include "esp_log.h"
 #include "robot.h"
 #include "motion_queue.h"
 #include "motor_test_queue.h"
@@ -12,6 +15,8 @@ A FreeRTOS powered controller for a tiny 2 wheel robot.
 #include "battery_monitor.h"
 #include "led_status.h"
 #include "device_id.h"
+
+static const char* TAG = "MAIN";
 
 static Robot robot;
 static MotionQueue motion_queue = NULL;
@@ -37,10 +42,10 @@ static bool create_tasks(void) {
         1
     );
     if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create Kinematics Controller task");
+        ESP_LOGE(TAG, "Failed to create Kinematics Controller task");
         return false;
     }
-    Serial.println("Kinematics Controller task created successfully");
+    ESP_LOGI(TAG, "Kinematics Controller task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
         EspNowCommunicator_Task,
@@ -52,10 +57,10 @@ static bool create_tasks(void) {
         0
     );
     if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create ESP-NOW Communicator task");
+        ESP_LOGE(TAG, "Failed to create ESP-NOW Communicator task");
         return false;
     }
-    Serial.println("ESP-NOW Communicator task created successfully");
+    ESP_LOGI(TAG, "ESP-NOW Communicator task created successfully");
     
     task_created = xTaskCreatePinnedToCore(
         PositionEstimator_SensorTask,
@@ -67,10 +72,10 @@ static bool create_tasks(void) {
         0
     );
     if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create Position Estimator Sensor task");
+        ESP_LOGE(TAG, "Failed to create Position Estimator Sensor task");
         return false;
     }
-    Serial.println("Position Estimator Sensor task created successfully");
+    ESP_LOGI(TAG, "Position Estimator Sensor task created successfully");
 
     task_created = xTaskCreatePinnedToCore(
         PositionEstimator_CalcTask,
@@ -82,10 +87,10 @@ static bool create_tasks(void) {
         0
     );
     if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create Position Estimator Calc task");
+        ESP_LOGE(TAG, "Failed to create Position Estimator Calc task");
         return false;
     }
-    Serial.println("Position Estimator Calc task created successfully");
+    ESP_LOGI(TAG, "Position Estimator Calc task created successfully");
     
     static BatteryMonitorParams battery_monitor_params = {
         .robot                          = &robot,
@@ -105,10 +110,10 @@ static bool create_tasks(void) {
         0
     );
     if (task_created != pdPASS) {
-        Serial.println("ERROR: Failed to create Battery Monitor task");
+        ESP_LOGE(TAG, "Failed to create Battery Monitor task");
         return false;
     }
-    Serial.println("Battery Monitor task created successfully");
+    ESP_LOGI(TAG, "Battery Monitor task created successfully");
     
     // No Status LED on V3 boards, keep for future use
     // task_created = xTaskCreatePinnedToCore(
@@ -121,10 +126,10 @@ static bool create_tasks(void) {
     //     0
     // );
     // if (task_created != pdPASS) {
-    //     Serial.println("ERROR: Failed to create LED Status task");
+    //     ESP_LOGE(TAG, "Failed to create LED Status task");
     //     return false;
     // }
-    // Serial.println("LED Status task created successfully");
+    // ESP_LOGI(TAG, "LED Status task created successfully");
     
     return true;
 }
@@ -132,53 +137,53 @@ static bool create_tasks(void) {
 static bool initialize_modules(void) {
     motion_queue = MotionQueue_Create(MOTION_QUEUE_SIZE);
     if (motion_queue == NULL) {
-        Serial.println("ERROR: Failed to create motion queue");
+        ESP_LOGE(TAG, "Failed to create motion queue");
         return false;
     }
-    Serial.println("Motion queue created successfully");
+    ESP_LOGI(TAG, "Motion queue created successfully");
     
     motor_test_queue = MotorTestQueue_Create(MOTION_QUEUE_SIZE);
     if (motor_test_queue == NULL) {
-        Serial.println("ERROR: Failed to create motor test queue");
+        ESP_LOGE(TAG, "Failed to create motor test queue");
         return false;
     }
-    Serial.println("Motor test queue created successfully");
+    ESP_LOGI(TAG, "Motor test queue created successfully");
     
     if (!robot.initialize()) {
-        Serial.println("ERROR: Failed to initialize robot");
+        ESP_LOGE(TAG, "Failed to initialize robot");
         return false;
     }
-    Serial.println("Robot initialized successfully");
+    ESP_LOGI(TAG, "Robot initialized successfully");
     
     if (!KinematicsController_Init(motion_queue, motor_test_queue)) {
-        Serial.println("ERROR: Failed to initialize kinematics controller");
+        ESP_LOGE(TAG, "Failed to initialize kinematics controller");
         return false;
     }
-    Serial.println("Kinematics controller initialized successfully");
+    ESP_LOGI(TAG, "Kinematics controller initialized successfully");
     
     if (!EspNowCommunicator_Init(motion_queue, motor_test_queue)) {
-        Serial.println("ERROR: Failed to initialize ESP-NOW communicator");
+        ESP_LOGE(TAG, "Failed to initialize ESP-NOW communicator");
         return false;
     }
-    Serial.println("ESP-NOW communicator initialized successfully");
+    ESP_LOGI(TAG, "ESP-NOW communicator initialized successfully");
     
     if (!PositionEstimator_Init()) {
-        Serial.println("ERROR: Failed to initialize position estimator");
+        ESP_LOGE(TAG, "Failed to initialize position estimator");
         return false;
     }
-    Serial.println("Position estimator initialized successfully");
+    ESP_LOGI(TAG, "Position estimator initialized successfully");
     
     if (!BatteryMonitor_Init(BATTERY_VOLTAGE_PIN)) {
-        Serial.println("ERROR: Failed to initialize battery monitor");
+        ESP_LOGE(TAG, "Failed to initialize battery monitor");
         return false;
     }
-    Serial.println("Battery monitor initialized successfully");
+    ESP_LOGI(TAG, "Battery monitor initialized successfully");
     
     // if (!LedStatus_Init(2)) {
-    //     Serial.println("ERROR: Failed to initialize LED status");
+    //     ESP_LOGE(TAG, "Failed to initialize LED status");
     //     return false;
     // }
-    // Serial.println("LED status initialized successfully");
+    // ESP_LOGI(TAG, "LED status initialized successfully");
     
     return true;
 }
@@ -186,7 +191,19 @@ static bool initialize_modules(void) {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    Serial.println("\n\n=== MiniBot Stepper Client ===");
+    // Suppress all tags by default (quiets framework/WiFi/NVS etc.), then
+    // re-enable our components at their configured levels.
+    esp_log_level_set("*", ESP_LOG_ERROR);
+    // Apply runtime log levels per component
+    esp_log_level_set("MAIN",       (esp_log_level_t)LOG_LEVEL_MAIN);
+    esp_log_level_set("BATTERY",    (esp_log_level_t)LOG_LEVEL_BATTERY);
+    esp_log_level_set("DEVICE_ID",  (esp_log_level_t)LOG_LEVEL_DEVICE_ID);
+    esp_log_level_set("ESPNOW",     (esp_log_level_t)LOG_LEVEL_ESPNOW);
+    esp_log_level_set("KINEMATICS", (esp_log_level_t)LOG_LEVEL_KINEMATICS);
+    esp_log_level_set("POS_EST",    (esp_log_level_t)LOG_LEVEL_POS_EST);
+    esp_log_level_set("MMC5633",    (esp_log_level_t)LOG_LEVEL_MMC5633);
+    esp_log_level_set("ROBOT",      (esp_log_level_t)LOG_LEVEL_ROBOT);
+    ESP_LOGI(TAG, "\n\n=== MiniBot Stepper Client ===");
 
     // Write device ID to NVS, ony do this one time. Persistant across reflashes.
     // TODO create a function to set ID based on current position on chess board
@@ -194,34 +211,34 @@ void setup() {
     
     uint8_t device_id = getDeviceID();
     if (device_id == 0xFF) {
-        Serial.println("WARNING: Device ID not configured!");
-        Serial.println("Set ID by calling: setDeviceID(id) where id is 0x01-0xFE");
+        ESP_LOGW(TAG, "Device ID not configured!");
+        ESP_LOGW(TAG, "Set ID by calling: setDeviceID(id) where id is 0x01-0xFE");
     } else {
-        Serial.printf("Device ID: 0x%02X\n", device_id);
+        ESP_LOGI(TAG, "Device ID: 0x%02X", device_id);
     }
     
-    Serial.println("Initializing FreeRTOS framework...");
+    ESP_LOGI(TAG, "Initializing FreeRTOS framework...");
     
     if (!initialize_modules()) {
-        Serial.println("FATAL: Module initialization failed");
+        ESP_LOGE(TAG, "FATAL: Module initialization failed");
         while (1) {
             delay(1000);
         }
     }
     
-    Serial.println("Modules initialized successfully");
-    Serial.println("\nCreating FreeRTOS tasks...");
+    ESP_LOGI(TAG, "Modules initialized successfully");
+    ESP_LOGI(TAG, "Creating FreeRTOS tasks...");
     
     if (!create_tasks()) {
-        Serial.println("FATAL: Task creation failed");
+        ESP_LOGE(TAG, "FATAL: Task creation failed");
         while (1) {
             delay(1000);
         }
     }
     
-    Serial.println("\nAll tasks created successfully");
-    Serial.println("Core 0: ESP-NOW, Position Estimator, Battery Monitor, LED Status");
-    Serial.println("Core 1: Kinematics Controller");
+    ESP_LOGI(TAG, "All tasks created successfully");
+    ESP_LOGI(TAG, "Core 0: ESP-NOW, Position Estimator, Battery Monitor, LED Status");
+    ESP_LOGI(TAG, "Core 1: Kinematics Controller");
 
     setCpuFrequencyMhz(80);
 }

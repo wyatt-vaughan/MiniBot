@@ -22,8 +22,8 @@
 
 // PosSync burst configuration
 #define POS_SYNC_INITIAL_DELAY_MS    5      // Delay before first sync pulse
-#define POS_SYNC_BURST_COUNT         10     // Number of sync pulses in burst
-#define POS_SYNC_BURST_INTERVAL_MS   5      // Interval between burst pulses
+#define POS_SYNC_BURST_COUNT         30     // Number of sync pulses in burst
+#define POS_SYNC_BURST_INTERVAL_MS   3      // Interval between burst pulses
 
 // GPIO pins for electromagnets (A=forward drive, B=reverse drive)
 const uint8_t EMAG_PINS_A[EMAG_COUNT] = {

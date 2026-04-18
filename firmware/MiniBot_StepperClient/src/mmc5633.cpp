@@ -1,5 +1,11 @@
 #include "mmc5633.h"
+#undef LOG_LOCAL_LEVEL
+#define LOG_LOCAL_LEVEL LOG_LEVEL_MMC5633
+#include "esp_log.h"
+#include "config.h"
 #include <math.h>
+
+static const char* TAG = "MMC5633";
 
 MMC5633NJL::MMC5633NJL(TwoWire &wire) : _wire(wire), _continuous_mode(false) {}
 
@@ -143,26 +149,26 @@ void MMC5633NJL::checkDeviceStatus() {
     bool ok_status1 = readRegister(REG_STATUS1, &status1);
 
     if (ok_status1) {
-        Serial.printf("[MMC5633 STATUS] 0x%02X\n", status1);
+        ESP_LOGD(TAG, "STATUS 0x%02X", status1);
     }
     else {
-        Serial.println("[MMC5633 STATUS] ERROR: failed to read status register");
+        ESP_LOGE(TAG, "Failed to read status register");
     }
 }
 
 bool MMC5633NJL::recoverDevice() {
-    Serial.println("[MMC5633] Attempting device recovery...");
+    ESP_LOGW(TAG, "Attempting device recovery...");
 
     // Full reinit sequence
     uint8_t pid = 0;
     if (!readRegister(REG_PRODUCT_ID, &pid) || pid != 0x10) {
-        Serial.println("[MMC5633] ERROR: cannot reach device during recovery");
+        ESP_LOGE(TAG, "Cannot reach device during recovery");
         return false;
     }
 
     // Soft reset via CTRL1 bit 7
     if (!writeRegister(REG_CTRL1, 0x80)) {
-        Serial.println("[MMC5633] ERROR: soft reset write failed");
+        ESP_LOGE(TAG, "Soft reset write failed");
         return false;
     }
     vTaskDelay(pdMS_TO_TICKS(20));
@@ -173,12 +179,12 @@ bool MMC5633NJL::recoverDevice() {
 
     if (_continuous_mode) {
         if (!enableContinuousMode()) {
-            Serial.println("[MMC5633] ERROR: failed to re-enable continuous mode after recovery");
+            ESP_LOGE(TAG, "Failed to re-enable continuous mode after recovery");
             return false;
         }
-        Serial.println("[MMC5633] Recovery successful — continuous mode re-enabled");
+        ESP_LOGD(TAG, "Recovery successful -- continuous mode re-enabled");
     } else {
-        Serial.println("[MMC5633] Recovery successful — on-demand mode restored");
+        ESP_LOGD(TAG, "Recovery successful -- on-demand mode restored");
     }
 
     _lastX = UINT32_MAX; _lastY = UINT32_MAX; _lastZ = UINT32_MAX;
