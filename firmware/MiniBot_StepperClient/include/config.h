@@ -148,11 +148,11 @@
 #define SENSOR_OFFSET_X_MM           -7.3f
 #define SENSOR_OFFSET_Y_MM           8.1f
 
-// Other stuff :)
-#define TRUE_POSE_LPF_CUTOFF_HZ      0.5f
-#define TRUE_POSE_LPF_REF_CONFIDENCE 1.0f    // Reference confidence for full LPF response; lower values → faster tracking
+// Position estimation parameters
+#define TRUE_POSE_LPF_CUTOFF_HZ      1.0f
+#define TRUE_POSE_LPF_REF_CONFIDENCE 2.0f   // Reference confidence for full LPF response; lower values → faster tracking
 #define TRUE_POSE_STALE_TIMEOUT_MS   1000   // Max age of true pose before it is considered stale
 #define EMAG_MIN_SIGNAL_GAUSS        0.5f   // Minimum fwd-rev differential magnitude to consider an emag reading valid
-#define EMAG_MAX_ANGLE_DELTA_RAD     0.8f   // Maximum allowed difference between forward and reverse azimuth angles for the same emag
+#define EMAG_MAX_ANGLE_DELTA_RAD     0.6f   // Maximum allowed difference between forward and reverse azimuth angles for the same emag
 
 #endif // __CONFIG_H__

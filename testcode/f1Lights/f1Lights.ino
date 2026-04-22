@@ -1,5 +1,5 @@
 const uint8_t npins = 5;
-const uint8_t ledpins[npins] = {27, 33, 25, 26, 14};
+const uint8_t ledpins[npins] = {14, 26, 25, 33, 27};
 
 void setup() {
   // put your setup code here, to run once:

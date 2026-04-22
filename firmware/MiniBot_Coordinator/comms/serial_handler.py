@@ -185,7 +185,8 @@ class _SerialWorker(QObject):
                     y_mm      = float(parts[3])
                     theta_deg = math.degrees(float(parts[4]))
                     battery_v = float(parts[6].strip())
-                    self.position_received.emit(piece_id, x_mm, y_mm, theta_deg, battery_v)
+                    if battery_v >= 0:
+                        self.position_received.emit(piece_id, x_mm, y_mm, theta_deg, battery_v)
                     self.ack_received.emit(piece_id)
                     return
             except (ValueError, IndexError):

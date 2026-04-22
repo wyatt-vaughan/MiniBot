@@ -27,12 +27,4 @@ typedef struct {
     float m1_velocity_rad_s;  // Motor 1 target velocity in rad/s
 } MotorTestRequest;
 
-/**
- * Result of a pos-sync start-pulse search, sent from the position estimator
- * to the communicator when leaving STATE_START_PULSES.
- */
-typedef struct {
-    bool detected;
-} PosSyncResult;
-
 #endif // __MESSAGES_IPC_H__

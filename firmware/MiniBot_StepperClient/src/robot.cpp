@@ -136,10 +136,10 @@ void Robot::updateEstimatedPosition() {
 }
 
 void Robot::setTruePose(float x, float y, float theta, float confidence) {
-    // if (is_moving) {
-    //     // Don't update true pose while actively moving, steppers induce too much noise
-    //     return;
-    // }
+    if (is_moving) {
+        // Don't update true pose while actively moving, steppers induce too much noise
+        return;
+    }
 
     uint32_t now_us = micros();
     xSemaphoreTake(true_pose_mutex, portMAX_DELAY);

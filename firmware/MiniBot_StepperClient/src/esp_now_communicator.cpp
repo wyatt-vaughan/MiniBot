@@ -418,7 +418,6 @@ void EspNowCommunicator_Task(void* pvParameters) {
         if (waiting_for_pos_sync) {
             while (esp_timer_get_time() < pos_sync_deadline_us) {
                 // Run to deadline: WiFi task sets pos_sync_received and updates
-                // pos_sync_best_* each time a better (earlier) pulse arrives.
             }
 
             if (pos_sync_received) {

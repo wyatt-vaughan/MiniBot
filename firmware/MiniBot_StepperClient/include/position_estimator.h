@@ -39,7 +39,6 @@ struct CalculatedPosition {
 };
 
 enum PositionEstState {
-    STATE_START_PULSES,
     STATE_MEASURING,
     STATE_IDLE,
     STATE_SYNC_LOST
@@ -95,22 +94,6 @@ bool PositionEstimator_Init(void);
  * @return true on success, false if magnetometer not initialized
  */
 bool PositionEstimator_GetLatestMagneticField(float* x, float* y, float* z);
-
-/**
- * Returns the queue handle used to receive PosSyncResult items.
- * The communicator task should receive from this queue to send ack/nack.
- */
-QueueHandle_t PositionEstimator_GetSyncResultQueue(void);
-
-/**
- * Trigger start-pulse search using the state machine. Non-blocking.
- * On exit from STATE_START_PULSES a PosSyncResult is posted to the sync
- * result queue (retrieved via PositionEstimator_GetSyncResultQueue).
- * Returns false if a search is already in progress.
- *
- * @param timeout_ms  Maximum time to search (ms)
- */
-bool PositionEstimator_StartSync(uint16_t timeout_ms);
 
 /**
  * Set the sync reference time externally (e.g. from an ESP-NOW PosSync message).
