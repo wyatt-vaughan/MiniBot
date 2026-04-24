@@ -32,14 +32,13 @@ static TaskHandle_t led_status_task_handle = NULL;
 static bool create_tasks(void) {
     BaseType_t task_created;
     
-    task_created = xTaskCreatePinnedToCore(
+    task_created = xTaskCreate(
         KinematicsController_Task,
         "KinematicsController",
         8192,
         (void*)&robot,
-        4,
-        &kinematics_task_handle,
-        1
+        5,
+        &kinematics_task_handle
     );
     if (task_created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create Kinematics Controller task");
@@ -47,14 +46,13 @@ static bool create_tasks(void) {
     }
     ESP_LOGI(TAG, "Kinematics Controller task created successfully");
     
-    task_created = xTaskCreatePinnedToCore(
+    task_created = xTaskCreate(
         EspNowCommunicator_Task,
         "EspNowCommunicator",
         2048,
         (void*)&robot,
-        2,
-        &communicator_task_handle,
-        0
+        3,
+        &communicator_task_handle
     );
     if (task_created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create ESP-NOW Communicator task");
@@ -62,14 +60,13 @@ static bool create_tasks(void) {
     }
     ESP_LOGI(TAG, "ESP-NOW Communicator task created successfully");
     
-    task_created = xTaskCreatePinnedToCore(
+    task_created = xTaskCreate(
         PositionEstimator_SensorTask,
         "PositionEstimatorSensor",
         4096,
         (void*)&robot,
-        3,
-        &position_estimator_sensor_task_handle,
-        0
+        4,
+        &position_estimator_sensor_task_handle
     );
     if (task_created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create Position Estimator Sensor task");
@@ -77,14 +74,13 @@ static bool create_tasks(void) {
     }
     ESP_LOGI(TAG, "Position Estimator Sensor task created successfully");
 
-    task_created = xTaskCreatePinnedToCore(
+    task_created = xTaskCreate(
         PositionEstimator_CalcTask,
         "PositionEstimatorCalc",
         4096,
         (void*)&robot,
         2,
-        &position_estimator_calc_task_handle,
-        0
+        &position_estimator_calc_task_handle
     );
     if (task_created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create Position Estimator Calc task");
@@ -100,14 +96,13 @@ static bool create_tasks(void) {
         .position_estimator_calc_task   = position_estimator_calc_task_handle,
     };
 
-    task_created = xTaskCreatePinnedToCore(
+    task_created = xTaskCreate(
         BatteryMonitor_Task,
         "BatteryMonitor",
         2048,
         (void*)&battery_monitor_params,
         1,
-        &battery_monitor_task_handle,
-        0
+        &battery_monitor_task_handle
     );
     if (task_created != pdPASS) {
         ESP_LOGE(TAG, "Failed to create Battery Monitor task");
@@ -116,14 +111,13 @@ static bool create_tasks(void) {
     ESP_LOGI(TAG, "Battery Monitor task created successfully");
     
     // No Status LED on V3 boards, keep for future use
-    // task_created = xTaskCreatePinnedToCore(
+    // task_created = xTaskCreate(
     //     LedStatus_Task,
     //     "LedStatus",
     //     1024,
     //     (void*)&robot,
-    //     0,
-    //     &led_status_task_handle,
-    //     0
+    //     1,
+    //     &led_status_task_handle
     // );
     // if (task_created != pdPASS) {
     //     ESP_LOGE(TAG, "Failed to create LED Status task");
@@ -191,10 +185,9 @@ static bool initialize_modules(void) {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    // Suppress all tags by default (quiets framework/WiFi/NVS etc.), then
-    // re-enable our components at their configured levels.
+
+    // Set component log levels
     esp_log_level_set("*", ESP_LOG_ERROR);
-    // Apply runtime log levels per component
     esp_log_level_set("MAIN",       (esp_log_level_t)LOG_LEVEL_MAIN);
     esp_log_level_set("BATTERY",    (esp_log_level_t)LOG_LEVEL_BATTERY);
     esp_log_level_set("DEVICE_ID",  (esp_log_level_t)LOG_LEVEL_DEVICE_ID);
@@ -244,6 +237,5 @@ void setup() {
 }
 
 void loop() {
-
     vTaskDelay(pdMS_TO_TICKS(1000));
 }

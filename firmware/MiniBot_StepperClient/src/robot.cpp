@@ -9,86 +9,9 @@
 
 static const char* TAG = "ROBOT";
 
-// Motor test RMT channels for precise stepping
-static rmt_channel_t motor_test_m0_rmt_channel = RMT_CHANNEL_0;
-static rmt_channel_t motor_test_m1_rmt_channel = RMT_CHANNEL_1;
 static Robot* g_motor_test_robot = NULL;
 static bool motor_test_m0_running = false;
 static bool motor_test_m1_running = false;
-static bool motor_test_m0_driver_installed = false;
-static bool motor_test_m1_driver_installed = false;
-
-bool StepperDriver::initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_t reset, bool reverse) {
-    step_pin = step;
-    dir_pin = dir;
-    enable_pin = enable;
-    reset_pin = reset;
-    reverse_motor = reverse;
-    enabled = false;
-    current_step_count = 0;
-    target_step_count = 0;
-    
-    // Configure pins as outputs
-    pinMode(step_pin, OUTPUT);
-    pinMode(dir_pin, OUTPUT);
-    pinMode(enable_pin, OUTPUT);
-    pinMode(reset_pin, OUTPUT);
-    
-    digitalWrite(enable_pin, LOW);
-    digitalWrite(reset_pin, LOW);
-    digitalWrite(step_pin, LOW);
-    digitalWrite(dir_pin, LOW);
-
-    return true;
-}
-
-bool StepperDriver::setMicrostepping(bool step_lvl, bool dir_lvl) {
-    // See config.h for microstepping settings
-    digitalWrite(step_pin, step_lvl);
-    digitalWrite(dir_pin, dir_lvl);
-    return true;
-}
-
-bool StepperDriver::resetDriver() {
-    disable();
-    digitalWrite(reset_pin, LOW);
-    vTaskDelay(pdMS_TO_TICKS(5));
-    digitalWrite(reset_pin, HIGH);
-    vTaskDelay(pdMS_TO_TICKS(5));
-    return true;
-}
-
-bool StepperDriver::enable() {
-    digitalWrite(enable_pin, HIGH);
-    enabled = true;
-    return true;
-}
-
-bool StepperDriver::disable() {
-    digitalWrite(enable_pin, LOW);
-    enabled = false;
-    return true;
-}
-
-bool StepperDriver::setDirection(bool direction) {
-    bool actual_direction = reverse_motor ? !direction : direction;
-    digitalWrite(dir_pin, actual_direction);
-    return true;
-}
-
-bool StepperDriver::step() {
-    if (!enabled) {
-        return false;
-    }
-    
-    digitalWrite(step_pin, HIGH);
-    delayMicroseconds(1);  // STSPIN220 requires >100ns pulse width
-    digitalWrite(step_pin, LOW);
-    
-    current_step_count++;
-    
-    return true;
-}
 
 bool Robot::initialize() {
     if (!left_wheel.initialize(L_WHEEL_STEP_PIN, L_WHEEL_DIR_PIN, STEPPER_EN_PIN, STEPPER_RST_PIN, L_WHEEL_REVERSE)) {
@@ -102,6 +25,9 @@ bool Robot::initialize() {
     left_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     right_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     left_wheel.resetDriver();  // only one reset needed, reset pin is shared
+
+    left_wheel.setRMTchannel(RMT_CHANNEL_0);
+    right_wheel.setRMTchannel(RMT_CHANNEL_1);
     
     wheel_radius_mm = WHEEL_RADIUS_MM;
     wheel_spacing_mm = WHEEL_SPACING_MM;
@@ -136,10 +62,10 @@ void Robot::updateEstimatedPosition() {
 }
 
 void Robot::setTruePose(float x, float y, float theta, float confidence) {
-    if (is_moving) {
-        // Don't update true pose while actively moving, steppers induce too much noise
-        return;
-    }
+    // if (is_moving) {
+    //     // Don't update true pose while actively moving, steppers induce too much noise
+    //     return;
+    // }
 
     uint32_t now_us = micros();
     xSemaphoreTake(true_pose_mutex, portMAX_DELAY);
@@ -408,6 +334,11 @@ static float getVelocityAtTime(const Robot::WheelMotion& m, float t) {
 
 void Robot::setTargetPose(MotionCommand target) {
     is_moving = true;
+    if (motor_test_active) {
+        ESP_LOGW(TAG, "Received motion command while motor test active. Stopping");
+        stopMotorTest();
+        return;
+    }
     
     float target_x = target.target_position_x_mm;
     float target_y = target.target_position_y_mm;
@@ -857,126 +788,42 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
     float m0_abs_vel = fabs(m0_velocity_rad_s);
     if (m0_abs_vel > 0.001f) {
         left_wheel.setDirection(m0_velocity_rad_s >= 0.0f);
-        
-        // Calculate step interval in microseconds (capped at max RMT duration ~32.7ms)
-        uint32_t step_interval_us = (uint32_t)fmax(1, (uint32_t)round(1000000.0f / (m0_abs_vel * steps_per_rad)));
-        step_interval_us = fmin(step_interval_us, 32000);  // Cap at RMT max duration
-        
-        // Configure RMT channel 0
-        rmt_config_t rmt_cfg = {};
-        rmt_cfg.channel = motor_test_m0_rmt_channel;
-        rmt_cfg.gpio_num = (gpio_num_t)L_WHEEL_STEP_PIN;
-        rmt_cfg.clk_div = 80;  // 80MHz / 80 = 1MHz = 1us per tick
-        rmt_cfg.mem_block_num = 1;
-        rmt_cfg.tx_config.loop_en = true;
-        
-        esp_err_t err = rmt_config(&rmt_cfg);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "RMT M0 config failed: %d", err);
+
+        if (!left_wheel.configureRMT(m0_abs_vel, steps_per_rad)) {
+            ESP_LOGE(TAG, "RMT M0 configure failed");
             return;
         }
-        
-        // Install driver only once
-        if (!motor_test_m0_driver_installed) {
-            err = rmt_driver_install(motor_test_m0_rmt_channel, 0, 0);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "RMT M0 driver install failed: %d", err);
-                return;
-            }
-            motor_test_m0_driver_installed = true;
-        }
-        
-        // Stop any existing transmission
-        if (motor_test_m0_running) {
-            rmt_tx_stop(motor_test_m0_rmt_channel);
-        }
-        
-        // Create pulse: HIGH for 1us, LOW for (interval-1) us
-        rmt_item32_t pulse = {};
-        pulse.level0 = 1;
-        pulse.duration0 = 1;  // 1us high
-        pulse.level1 = 0;
-        pulse.duration1 = fmax(1, step_interval_us - 1);  // Low for rest of interval
-        
-        err = rmt_write_items(motor_test_m0_rmt_channel, &pulse, 1, false);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "RMT M0 write_items failed: %d", err);
+
+        if (!left_wheel.startRMT()) {
+            ESP_LOGE(TAG, "RMT M0 start failed");
             return;
         }
-        
-        err = rmt_tx_start(motor_test_m0_rmt_channel, true);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "RMT M0 tx_start failed: %d", err);
+    } else if (left_wheel.getRMTRunning()) {
+        if (!left_wheel.stopRMT()){
+            ESP_LOGE(TAG, "RMT M0 stop failed");
             return;
         }
-        
-        motor_test_m0_running = true;
-    } else if (motor_test_m0_running) {
-        rmt_tx_stop(motor_test_m0_rmt_channel);
-        motor_test_m0_running = false;
     }
     
     // M1 setup with RMT
     float m1_abs_vel = fabs(m1_velocity_rad_s);
     if (m1_abs_vel > 0.001f) {
         right_wheel.setDirection(m1_velocity_rad_s >= 0.0f);
-        
-        // Calculate step interval in microseconds (capped at max RMT duration ~32.7ms)
-        uint32_t step_interval_us = (uint32_t)fmax(1, (uint32_t)round(1000000.0f / (m1_abs_vel * steps_per_rad)));
-        step_interval_us = fmin(step_interval_us, 32000);  // Cap at RMT max duration
-        
-        // Configure RMT channel 1
-        rmt_config_t rmt_cfg = {};
-        rmt_cfg.channel = motor_test_m1_rmt_channel;
-        rmt_cfg.gpio_num = (gpio_num_t)R_WHEEL_STEP_PIN;
-        rmt_cfg.clk_div = 80;  // 80MHz / 80 = 1MHz = 1us per tick
-        rmt_cfg.mem_block_num = 1;
-        rmt_cfg.tx_config.loop_en = true;
-        
-        esp_err_t err = rmt_config(&rmt_cfg);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "RMT M1 config failed: %d", err);
+
+        if (!right_wheel.configureRMT(m1_abs_vel, steps_per_rad)) {
+            ESP_LOGE(TAG, "RMT M1 configure failed");
             return;
         }
-        
-        // Install driver only once
-        if (!motor_test_m1_driver_installed) {
-            err = rmt_driver_install(motor_test_m1_rmt_channel, 0, 0);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "RMT M1 driver install failed: %d", err);
-                return;
-            }
-            motor_test_m1_driver_installed = true;
-        }
-        
-        // Stop any existing transmission
-        if (motor_test_m1_running) {
-            rmt_tx_stop(motor_test_m1_rmt_channel);
-        }
-        
-        // Create pulse: HIGH for 1us, LOW for (interval-1) us
-        rmt_item32_t pulse = {};
-        pulse.level0 = 1;
-        pulse.duration0 = 1;  // 1us high
-        pulse.level1 = 0;
-        pulse.duration1 = fmax(1, step_interval_us - 1);  // Low for rest of interval
-        
-        err = rmt_write_items(motor_test_m1_rmt_channel, &pulse, 1, false);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "RMT M1 write_items failed: %d", err);
+
+        if (!right_wheel.startRMT()) {
+            ESP_LOGE(TAG, "RMT M1 start failed");
             return;
         }
-        
-        err = rmt_tx_start(motor_test_m1_rmt_channel, true);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "RMT M1 tx_start failed: %d", err);
+    } else if (right_wheel.getRMTRunning()) {
+        if (!right_wheel.stopRMT()){
+            ESP_LOGE(TAG, "RMT M1 stop failed");
             return;
         }
-        
-        motor_test_m1_running = true;
-    } else if (motor_test_m1_running) {
-        rmt_tx_stop(motor_test_m1_rmt_channel);
-        motor_test_m1_running = false;
     }
 }
 
@@ -987,13 +834,17 @@ void Robot::stopMotorTest() {
     current_m0_velocity_rad_s = 0.0f;
     current_m1_velocity_rad_s = 0.0f;
     
-    if (motor_test_m0_running) {
-        rmt_tx_stop(motor_test_m0_rmt_channel);
-        motor_test_m0_running = false;
+    if (left_wheel.getRMTRunning()) {
+        if (!left_wheel.stopRMT()){
+            ESP_LOGE(TAG, "RMT M0 stop failed");
+            return;
+        }
     }
-    if (motor_test_m1_running) {
-        rmt_tx_stop(motor_test_m1_rmt_channel);
-        motor_test_m1_running = false;
+    if (right_wheel.getRMTRunning()) {
+        if (!right_wheel.stopRMT()){
+            ESP_LOGE(TAG, "RMT M1 stop failed");
+            return;
+        }
     }
     
     left_wheel.disable();
