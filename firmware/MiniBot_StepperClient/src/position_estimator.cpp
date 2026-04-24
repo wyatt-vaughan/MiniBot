@@ -465,7 +465,7 @@ void PositionEstimator_SensorTask(void* pvParameters) {
             delayMicroseconds(EMAG_MIN_SAMPLE_PERIOD_US - elapsed_micros);
         }
 
-        int64_t ready_deadline = esp_timer_get_time() + 2 * EMAG_MIN_SAMPLE_PERIOD_US;
+        int64_t ready_deadline = esp_timer_get_time() + EMAG_MIN_SAMPLE_PERIOD_US;
         while (!mag.isMeasurementReady() && esp_timer_get_time() < ready_deadline) {
             delayMicroseconds(1);
         }

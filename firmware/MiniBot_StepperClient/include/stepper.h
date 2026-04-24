@@ -102,9 +102,10 @@ public:
 
     /**
      * Stop RMT transmission
+     * @param steps_out Optional pointer to receive estimated step count since startRMT()
      * @return true on success, false on failure
      */
-    bool stopRMT();
+    bool stopRMT(int* steps_out = nullptr);
 
     bool getRMTRunning() const { return rmt_running; }
 

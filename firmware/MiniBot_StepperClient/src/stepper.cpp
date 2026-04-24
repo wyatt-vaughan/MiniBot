@@ -145,14 +145,18 @@ bool StepperDriver::startRMT() {
     return true;
 }
 
-bool StepperDriver::stopRMT() {
+bool StepperDriver::stopRMT(int* steps_out) {
     esp_err_t err = rmt_tx_stop(rmt_channel);
     if (err != ESP_OK) {
         return false;
     }
     int64_t elapsed_us = esp_timer_get_time() - rmt_start_time_us;
-    int64_t steps_taken = elapsed_us / step_interval_us;
+    int64_t steps_taken = (step_interval_us > 0) ? (elapsed_us / step_interval_us) : 0;
     current_step_count += steps_taken * current_direction;
+
+    if (steps_out != nullptr) {
+        *steps_out = (int)steps_taken;
+    }
 
     rmt_running = false;
     rmt_start_time_us = 0;

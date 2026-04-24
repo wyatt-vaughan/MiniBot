@@ -239,6 +239,9 @@ private:
                            TickType_t start_tick, TickType_t target_end_tick,
                            std::function<void(int32_t)> step_callback);
     
+    // Shared accel/cruise(RMT)/decel step loop for synchronized wheel pairs
+    void executeStepLoop(const WheelMotion& profile, float steps_per_mm);
+
     // New motion execution methods
     void executeRotation(float angle_rad, float target_time_s);
     void executeStraightLine(float distance_mm, float target_time_s);

@@ -328,6 +328,24 @@ static float getVelocityAtTime(const Robot::WheelMotion& m, float t) {
     }
 }
 
+static bool preciseWaitUntil(int64_t target_us){
+    int64_t now_us = esp_timer_get_time();
+    int64_t wait_us = target_us - now_us;
+
+    // Yielding wait if longer than 1.5ms
+    if (wait_us > 1500) {
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)((wait_us - 500) / 1000)));
+    }
+
+    now_us = esp_timer_get_time();
+    wait_us = target_us - now_us;
+    if (wait_us < 0) {
+        return false;  // Target time already passed
+    }
+    delayMicroseconds((uint32_t)wait_us);
+    return true;
+}
+
 // ============================================================================
 // Main Motion Control
 // ============================================================================
@@ -452,6 +470,104 @@ void Robot::setTargetPose(MotionCommand target) {
 }
 
 // ============================================================================
+// Shared Accel / Cruise(RMT) / Decel Step Loop
+// Drives left_wheel and right_wheel synchronously through a single WheelMotion profile.
+// Both wheels must have direction set before calling.
+// ============================================================================
+
+void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
+    const float step_distance_mm = 1.0f / steps_per_mm;
+    const float a = profile.accel_mm_s2;
+    const float v_max = profile.max_velocity_mm_s;
+
+    float accel_dist = 0.5f * a * profile.accel_time_s * profile.accel_time_s;
+    int32_t accel_steps = (int32_t)(accel_dist * steps_per_mm);
+    int32_t decel_steps = accel_steps;
+    int32_t cruise_steps = profile.total_steps - accel_steps - decel_steps;
+    if (cruise_steps < 0) cruise_steps = 0;
+
+    int32_t steps_done = 0;
+    uint8_t phase = 0;
+    int64_t start_us = esp_timer_get_time();
+
+    if (cruise_steps != 0) {
+        float vel_rad_s = v_max / wheel_radius_mm;
+        float steps_per_rad_val = steps_per_revolution / (2.0f * M_PI);
+        left_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
+        right_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
+    }
+
+    while (steps_done < profile.total_steps) {
+        if (phase == 0 && steps_done >= accel_steps) {
+            phase = (cruise_steps > 0) ? 1 : 2;
+        }
+
+        int64_t now_us = esp_timer_get_time();
+        float elapsed_s = (float)(now_us - start_us) * 1e-6f;
+
+        if (elapsed_s > profile.total_time_s + 1.0f) break;
+
+        int64_t target_us = -1;
+
+        switch (phase) {
+            case 0: {
+                // Acceleration: analytical step time from rest
+                float t_next = sqrtf(2.0f * (steps_done + 1) * step_distance_mm / a);
+                target_us = start_us + (int64_t)(t_next * 1e6f);
+                break;
+            }
+
+            case 1: {
+                // Cruise: RMT handles pulsing; wait for cruise window then stop
+                left_wheel.startRMT();
+                right_wheel.startRMT();
+                ESP_LOGD(TAG, "  Cruise phase started at step %ld, target velocity %.1f mm/s", steps_done, v_max);
+
+                int64_t cruise_end_us = start_us + (int64_t)((profile.accel_time_s + profile.cruise_time_s) * 1e6f);
+                if (!preciseWaitUntil(cruise_end_us)) {
+                    ESP_LOGW(TAG, "  Cruise phase timing missed");
+                }
+
+                int left_cruise_actual = 0, right_cruise_actual = 0;
+                left_wheel.stopRMT(&left_cruise_actual);
+                right_wheel.stopRMT(&right_cruise_actual);
+                ESP_LOGD(TAG, "  Cruise phase ended at step %ld, actual cruise steps: L=%d, R=%d", 
+                           steps_done, left_cruise_actual, right_cruise_actual);
+
+                if (abs(left_cruise_actual - cruise_steps) > 2) {
+                    ESP_LOGW(TAG, "  Cruise L step mismatch: expected %ld got %d", cruise_steps, left_cruise_actual);
+                }
+                if (abs(right_cruise_actual - cruise_steps) > 2) {
+                    ESP_LOGW(TAG, "  Cruise R step mismatch: expected %ld got %d", cruise_steps, right_cruise_actual);
+                }
+
+                steps_done += cruise_steps;
+                phase = 2;
+                break;
+            }
+
+            case 2: {
+                // Deceleration: mirror of accel, time from end
+                int32_t remaining_after = profile.total_steps - steps_done - 1;
+                float t_from_end = sqrtf(2.0f * remaining_after * step_distance_mm / a);
+                float t_next = profile.total_time_s - t_from_end;
+                target_us = start_us + (int64_t)(t_next * 1e6f);
+                break;
+            }
+        }
+
+        if (target_us != -1) {
+            if (!preciseWaitUntil(target_us)) {
+                ESP_LOGW(TAG, "  Accel/Decel phase timing missed for step %ld", steps_done + 1);
+            }
+            left_wheel.step();
+            right_wheel.step();
+            steps_done++;
+        }
+    }
+}
+
+// ============================================================================
 // Execute Rotation (in place)
 // ============================================================================
 
@@ -468,7 +584,6 @@ void Robot::executeRotation(float angle_rad, float target_time_s) {
     float wheel_arc = (wheel_spacing_mm / 2.0f) * fabs(angle_rad);
     float steps_per_mm = steps_per_revolution / (2.0f * M_PI * wheel_radius_mm);
     
-    // Both wheels travel same distance, opposite directions
     WheelMotion profile = calculateWheelProfile(wheel_arc, target_time_s,
                                                  stepper_max_velocity_mm_s,
                                                  robot_max_accel_mm_s2,
@@ -476,35 +591,15 @@ void Robot::executeRotation(float angle_rad, float target_time_s) {
     
     if (profile.total_steps == 0) return;
     
-    // Set directions: positive angle = CCW = left backward, right forward
+    // Positive angle = CCW = left backward, right forward
     bool cw = (angle_rad < 0);
-    left_wheel.setDirection(cw);   // left goes forward for CW
-    right_wheel.setDirection(!cw); // right goes backward for CW
+    left_wheel.setDirection(cw);
+    right_wheel.setDirection(!cw);
     
     ESP_LOGD(TAG, "  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld",
                profile.max_velocity_mm_s, profile.total_time_s * 1000, profile.total_steps);
-    
-    // Execute motion: compare integrated expected distance to actual, step when behind
-    uint32_t start_us = micros();
-    float step_distance_mm = 1.0f / steps_per_mm;
-    float distance_done = 0;
-    int32_t steps_done = 0;
 
-    while (steps_done < profile.total_steps) {
-        float elapsed_s = (micros() - start_us) / 1000000.0f;
-        float expected = integrateDistance(profile, elapsed_s);
-
-        if (distance_done < expected) {
-            left_wheel.step();
-            right_wheel.step();
-            steps_done++;
-            distance_done += step_distance_mm;
-        } else {
-            delayMicroseconds(50);
-        }
-
-        if (elapsed_s > profile.total_time_s + 1.0f) break;
-    }
+    executeStepLoop(profile, steps_per_mm);
 }
 
 // ============================================================================
@@ -532,28 +627,8 @@ void Robot::executeStraightLine(float distance_mm, float target_time_s) {
     ESP_LOGD(TAG, "  Profile: v=%.1f mm/s, t=%.0f ms, steps=%ld, %s",
                profile.max_velocity_mm_s, profile.total_time_s * 1000, 
                profile.total_steps, forward ? "FWD" : "REV");
-    
-    // Execute motion: compare integrated expected distance to actual, step when behind
-    uint32_t start_us = micros();
-    float step_distance_mm = 1.0f / steps_per_mm;
-    float distance_done = 0;
-    int32_t steps_done = 0;
 
-    while (steps_done < profile.total_steps) {
-        float elapsed_s = (micros() - start_us) / 1000000.0f;
-        float expected = integrateDistance(profile, elapsed_s);
-
-        if (distance_done < expected) {
-            left_wheel.step();
-            right_wheel.step();
-            steps_done++;
-            distance_done += step_distance_mm;
-        } else {
-            delayMicroseconds(50);
-        }
-
-        if (elapsed_s > profile.total_time_s + 1.0f) break;
-    }
+    executeStepLoop(profile, steps_per_mm);
 }
 
 // ============================================================================
