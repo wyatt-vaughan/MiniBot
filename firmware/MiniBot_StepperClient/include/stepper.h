@@ -107,6 +107,18 @@ public:
      */
     bool stopRMT(int* steps_out = nullptr);
 
+    /**
+     * Detach step pin from RMT peripheral so manual step() calls work.
+     * Must be called before using step() when RMT has been initialized.
+     */
+    void detachStepFromRMT();
+
+    /**
+     * Re-attach step pin to RMT output after manual stepping.
+     * Must be called before using startRMT().
+     */
+    void attachStepToRMT();
+
     bool getRMTRunning() const { return rmt_running; }
 
 };

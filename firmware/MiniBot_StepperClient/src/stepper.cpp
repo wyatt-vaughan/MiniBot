@@ -162,3 +162,18 @@ bool StepperDriver::stopRMT(int* steps_out) {
     rmt_start_time_us = 0;
     return true;
 }
+
+void StepperDriver::detachStepFromRMT() {
+    if (!rmt_initialized) return;
+    // Disconnect step pin from RMT and reclaim as a plain GPIO output
+    gpio_reset_pin((gpio_num_t)step_pin);
+    gpio_set_direction((gpio_num_t)step_pin, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)step_pin, 0);
+}
+
+void StepperDriver::attachStepToRMT() {
+    if (!rmt_initialized) return;
+    // Re-route step pin through the RMT TX output signal
+    gpio_set_direction((gpio_num_t)step_pin, GPIO_MODE_INPUT_OUTPUT);
+    rmt_set_gpio(rmt_channel, RMT_MODE_TX, (gpio_num_t)step_pin, false);
+}

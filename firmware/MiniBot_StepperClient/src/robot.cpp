@@ -497,6 +497,10 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
         right_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
     }
 
+    // Detach step pins from RMT so manual step() calls work during accel/decel
+    left_wheel.detachStepFromRMT();
+    right_wheel.detachStepFromRMT();
+
     while (steps_done < profile.total_steps) {
         if (phase == 0 && steps_done >= accel_steps) {
             phase = (cruise_steps > 0) ? 1 : 2;
@@ -519,6 +523,9 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
 
             case 1: {
                 // Cruise: RMT handles pulsing; wait for cruise window then stop
+                // Re-attach to RMT before handing off to the peripheral
+                left_wheel.attachStepToRMT();
+                right_wheel.attachStepToRMT();
                 left_wheel.startRMT();
                 right_wheel.startRMT();
                 ESP_LOGD(TAG, "  Cruise phase started at step %ld, target velocity %.1f mm/s", steps_done, v_max);
@@ -531,6 +538,9 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
                 int left_cruise_actual = 0, right_cruise_actual = 0;
                 left_wheel.stopRMT(&left_cruise_actual);
                 right_wheel.stopRMT(&right_cruise_actual);
+                // Detach again so decel manual step() calls work
+                left_wheel.detachStepFromRMT();
+                right_wheel.detachStepFromRMT();
                 ESP_LOGD(TAG, "  Cruise phase ended at step %ld, actual cruise steps: L=%d, R=%d", 
                            steps_done, left_cruise_actual, right_cruise_actual);
 
@@ -550,8 +560,12 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
                 // Deceleration: mirror of accel, time from end
                 int32_t remaining_after = profile.total_steps - steps_done - 1;
                 float t_from_end = sqrtf(2.0f * remaining_after * step_distance_mm / a);
-                float t_next = profile.total_time_s - t_from_end;
-                target_us = start_us + (int64_t)(t_next * 1e6f);
+
+                int64_t end_us = start_us + (int64_t)(profile.total_time_s * 1e6f);
+                int64_t next_step_us = end_us - (int64_t)(t_from_end * 1e6f);
+                int64_t time_to_next = next_step_us - now_us;
+                if (time_to_next > 50000) time_to_next = 50000;
+                target_us = now_us + time_to_next;
                 break;
             }
         }
@@ -565,6 +579,10 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
             steps_done++;
         }
     }
+
+    // Re-attach step pins to RMT, leaving system ready for subsequent RMT use
+    left_wheel.attachStepToRMT();
+    right_wheel.attachStepToRMT();
 }
 
 // ============================================================================
