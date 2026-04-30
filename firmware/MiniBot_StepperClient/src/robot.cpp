@@ -618,7 +618,7 @@ void Robot::executeStraightLine(float distance_mm, float target_time_s) {
             steps_done++;
             distance_done += step_distance_mm;
         } else {
-            delayMicroseconds(50);
+            delayMicroseconds(10);
         }
 
         if (elapsed_s > profile.total_time_s + 1.0f) break;
