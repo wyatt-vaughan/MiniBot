@@ -24,12 +24,18 @@ static volatile int64_t pos_sync_best_receive_time_us = 0;
 static volatile uint32_t pos_sync_best_ttnf_us = 0;
 static volatile int64_t pos_sync_candidate_time_us = 0;  // written in recv_cb, read in handler
 
+static int64_t last_sync_received_us = 0;   // cleared at boot; set on each successful PosSync
+static bool duty_cycle_active = false;
+static uint16_t last_accepted_seq_num = 0;
+static bool seq_num_initialized = false;
+
 static void esp_now_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len);
 static void esp_now_message_handler(const uint8_t *mac_addr, const uint8_t *data, int len);
 static bool ensure_peer_exists(const uint8_t *mac_addr);
 static bool send_ack_message(const uint8_t *mac_addr);
 static void send_completion_ack_if_pending();
 static void pos_sync_store(int64_t receive_time_us, uint32_t ttnf_us);
+static void set_duty_cycle(bool enable);
 
 bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test_q) {
     if (motion_queue == NULL || motor_test_q == NULL) {
@@ -41,6 +47,7 @@ bool EspNowCommunicator_Init(MotionQueue motion_queue, MotorTestQueue motor_test
     
     WiFi.mode(WIFI_STA);
     delay(100);
+    WiFi.setTxPower(WIFI_POWER);
     ESP_LOGD(TAG, "WiFi MAC: %s", WiFi.macAddress().c_str());
     
     if (esp_now_init() != ESP_OK) {
@@ -69,6 +76,21 @@ static void pos_sync_store(int64_t receive_time_us, uint32_t ttnf_us) {
     pos_sync_best_receive_time_us = receive_time_us;
     pos_sync_best_ttnf_us = ttnf_us;
     pos_sync_received = true;
+}
+
+static void set_duty_cycle(bool enable) {
+    if (enable == duty_cycle_active) return;
+    if (enable) {
+        esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+        esp_now_set_wake_window(ESPNOW_WAKE_WINDOW_MS * 1000);  // API takes microseconds
+        esp_wifi_set_connectionless_wake_interval(ESPNOW_WAKE_INTERVAL_MS);
+        ESP_LOGI(TAG, "Duty cycle enabled (%d ms window / %d ms interval)",
+                 ESPNOW_WAKE_WINDOW_MS, ESPNOW_WAKE_INTERVAL_MS);
+    } else {
+        esp_wifi_set_ps(WIFI_PS_NONE);
+        ESP_LOGI(TAG, "Duty cycle disabled — radio always on");
+    }
+    duty_cycle_active = enable;
 }
 
 static void esp_now_recv_cb(const uint8_t *mac_addr, const uint8_t *data, int len) {
@@ -414,17 +436,18 @@ void EspNowCommunicator_Task(void* pvParameters) {
             send_completion_ack_if_pending();
         }
 
-        // Busy-wait through the full deadline to collect all burst pulses, then use the best
+        // Sleep through the deadline — recv_cb runs in the WiFi driver context
         if (waiting_for_pos_sync) {
-            while (esp_timer_get_time() < pos_sync_deadline_us) {
-                // Run to deadline: WiFi task sets pos_sync_received and updates
+            int64_t remaining_us = pos_sync_deadline_us - esp_timer_get_time();
+            if (remaining_us > 0) {
+                vTaskDelay(pdMS_TO_TICKS((remaining_us + 999) / 1000 + 1));
             }
 
             if (pos_sync_received) {
-                // Serial.println(pos_sync_best_receive_time_us);
                 PositionEstimator_SetSyncTime(pos_sync_best_receive_time_us);
+                last_sync_received_us = esp_timer_get_time();
 
-                // Random delay to spread acks from multiple robots
+                // Random delay to spread acks from multiple robots. Idk if I need this..
                 vTaskDelay(pdMS_TO_TICKS(esp_random() % 101));
                 send_ack_message(last_sender_mac);
             } else {
@@ -435,6 +458,13 @@ void EspNowCommunicator_Task(void* pvParameters) {
             pos_sync_received = false;
             waiting_for_pos_sync = false;
         }
+
+        // Enable duty cycling only when sync is fresh; fall back to always-on if sync is stale
+        // so the server can still reach the bot to re-establish sync
+        bool sync_is_fresh = (last_sync_received_us != 0) &&
+            ((esp_timer_get_time() - last_sync_received_us) <
+             (int64_t)SYNC_DUTY_CYCLE_TIMEOUT_MS * 1000LL);
+        set_duty_cycle(sync_is_fresh);
 
         #if SPAM_POSITION
         if (station_mac_established) {
