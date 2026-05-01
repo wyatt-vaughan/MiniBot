@@ -17,13 +17,10 @@ Per-bot hardware cost is approximately $4 excluding PCB.
 1. [System Architecture](#system-architecture)
 2. [Hardware](#hardware)
 3. [Communication Pathways](#communication-pathways)
-4. [Coordinator](#coordinator)
-5. [Server Firmware](#server-firmware)
-6. [MiniBot Firmware](#minibot-firmware)
-7. [Localization](#localization)
-8. [Critical Objects](#critical-objects)
-9. [PCB and CAD](#pcb-and-cad)
-10. [Build and Setup](#build-and-setup)
+4. [Server-Bot Sync](#server-bot-sync)
+5. [Localization](#localization)
+6. [PCB and CAD](#pcb-and-cad)
+7. [Firmware](#firmware)
 
 ---
 
@@ -31,8 +28,7 @@ Per-bot hardware cost is approximately $4 excluding PCB.
 
 The system has three layers:
 
-**Coordinator** is a Python/PyQt6 application intended to run on Raspberry Pi, 
-though it could run on a more powerful computer if desired. It holds
+**Coordinator** is a Python/PyQt6 application running on a Raspberry Pi. It holds
 board state, runs path planning, drives the GUI, and sends motion commands to the
 Server over USB serial.
 
@@ -53,24 +49,22 @@ and battery management entirely onboard.
 
 | Component | Details |
 |-----------|---------|
-| MCU | ESP32-C3 (RISC-V, 80 MHz underclock, 2.4 GHz WiFi) |
+| MCU | ESP32-C3 (RISC-V, 2.4 GHz WiFi) |
 | Motors | 2x PMO8-2 miniature stepper motors |
-| Motor drivers | STSPIN220 (1/128 microstepping mode) |
+| Motor drivers | STSPIN220 |
 | Magnetometer | MMC5633NJL (I2C) |
-| Power | 170 mAh LiPo |
-| Chassis | Fully 3D printed; 2x M2x5mm bolts , 2x 7mm ID 10mm OD o-rings |
+| Power | ~170 mAh LiPo |
+| Chassis | Fully 3D printed; 2x M2x5mm bolts, 2x 7mm ID o-rings for tires |
 | PCB | Custom 4-layer; fits in the base of the chassis |
-
-Physical constants: wheel radius 5.25 mm, wheel spacing 23.4 mm, 160 microsteps/rev.
 
 ### Server / Motherboard
 
 | Component | Details |
 |-----------|---------|
-| MCU | ESP32-C3 (RISC-V, 160 MHz, 2.4 GHz WiFi) |
-| Electromagnets | Up to 20x, positioned at fixed known coordinates on the board |
-| Interface | USB serial to Raspberry Pi (921600 baud) |
-| WiFi | Soft AP, SSID `ChessBot-Server`, channel 6, IP `192.168.4.1` |
+| MCU | ESP32-C3 (RISC-V, 2.4 GHz WiFi) |
+| Electromagnets | Multiple, positioned at fixed known coordinates on the board |
+| Interface | USB serial to Raspberry Pi |
+| WiFi | Soft AP; bots connect on a dedicated channel |
 
 The electromagnets fire in a timed sequence that the MiniBots detect with their
 onboard magnetometers. This is the primary localization mechanism.
@@ -82,12 +76,12 @@ onboard magnetometers. This is the primary localization mechanism.
 ```
 Coordinator (Raspberry Pi)
     |
-    |  USB Serial -- CSV protocol, 921600 baud, newline-terminated
+    |  USB Serial -- CSV protocol, newline-terminated
     |  Format: >type,args
     |
 Server ESP32 (Motherboard)
     |
-    |  ESP-NOW -- 2.4 GHz, channel 6, broadcast + unicast
+    |  ESP-NOW -- 2.4 GHz, broadcast + unicast
     |  Binary packed structs
     |
 MiniBot #1 ... MiniBot #34 (ESP32-C3)
@@ -123,128 +117,55 @@ Binary packed structs defined in `ESPNowMessages.h` (Server) and
 
 ---
 
-## Coordinator
+## Server-Bot Sync
 
-Source: `firmware/MiniBot_Coordinator/`
+Before a localization measurement can be taken, every MiniBot needs to know
+precisely when the electromagnet frame will begin so it can timestamp its
+magnetometer samples against a common reference.
 
-Entry point is `main.py`, which starts a PyQt6 `MainWindow`. All system constants
-live in `config.py`, organized into classes:
+**Initiating a sync** is triggered by the Coordinator sending a `>7` sync command.
+The Server's `CommunicatorTask` handles it as follows:
 
-| Class | Contents |
-|-------|---------|
-| `BOARD` | Physical geometry: 400x400 mm playing area, 50 mm squares, border margins |
-| `PIECES` | 34 piece IDs (0x01-0x11 white, 0x12-0x22 black), home positions, rank assignments |
-| `COMM` | Serial protocol constants (921600 baud, CSV prefix `>`) |
-| `GUI` | Colors, fonts, window dimensions |
-| `PLANNING` | Path planner registry |
-| `CHESS` | FEN string, rules engine adapter hooks |
-| `SIMULATOR` | Software-in-the-loop config (80 mm/s nominal speed, 50 ms ticks) |
+1. A `PosSyncCommand` is broadcast to all bots. The message includes a timeout
+   indicating how long the bots should stay awake listening for the frame.
+2. After a short delay, the Server sends a rapid burst of `PosSync` pulses. Each
+   carries a `next_frame_us` field indicating how many microseconds until the
+   electromagnet frame starts.
+3. The `ElectromagnetTask` fires the frame immediately after the burst completes.
 
-### GUI (gui/)
+**On each MiniBot**, when `PosSyncCommand` is received, `EspNowCommunicator` sets
+a deadline and raises `waiting_for_pos_sync`. The ESP-NOW receive callback captures
+a high-resolution timestamp the instant each `PosSync` pulse arrives, before any
+further processing. The task keeps only the earliest-arriving pulse from the burst —
+minimum latency gives the best timing accuracy. The estimated frame start is
+`receive_time + next_frame_us` from that best pulse.
 
-`ChessBoardWidget` renders all 34 pieces with live position and orientation updates.
-The right panel contains tabbed controls: Path Planning, Debug, System Control, and
-Position Tracker. Board clicks and manual inputs flow through the Path Planning tab
-into the active planner, which produces a list of `MoveCommand` objects. These are
-either sent to the `SerialHandler` (hardware) or the `Simulator` (software-in-the-loop).
+Once the deadline passes, the bot calls `PositionEstimator_SetSyncTime()` with the
+estimated frame-start, then sends an ACK with a small random delay to spread
+simultaneous responses from many bots. If no pulse arrived in time, it sends
+`ERR_SYNC_TIMEOUT`.
 
-### Path Planning (planning/)
-
-Two planners derive from `BasePlanner`:
-
-- `DirectPlanner`: All pieces move simultaneously to their targets. Every
-  `MoveCommand` gets `sequence_num=0`.
-- `QueuedPlanner`: Pieces move one at a time in ascending ID order. Each command
-  gets an incrementing `sequence_num` that the dispatcher uses for ordering.
-
-Both of these currently suck. Really bad. This stuff needs a lotta work.
-
-### Serial Handler (comms/)
-
-`SerialHandler` runs a background `QThread` (`_SerialWorker`) for non-blocking I/O.
-Outgoing commands are queued with backpressure: stale commands are dropped if the
-queue exceeds its depth limit. Incoming lines are parsed by `protocol.py` into
-`ParsedMessage` dataclasses.
-
-Qt signals emitted: `position_received`, `ack_received`, `error_received`,
-`mag_field_received`, `connection_changed`.
-
-### Simulator (simulation/)
-
-`MotionSimulator` is a drop-in replacement for the serial link. It runs on a 50 ms
-`QTimer`, simulates two-phase motion (rotate to face target, then translate),
-enforces board boundaries, and detects collisions (pieces within 2 radii + margin
-are blocked for that tick). Emits the same Qt signals as the serial handler so the
-rest of the application is unaware of the difference.
-
----
-
-## Server Firmware
-
-Source: `firmware/MiniBot_Server/`
-
-Built with PlatformIO. All FreeRTOS tasks are created in `main.cpp`; configuration
-constants are in `include/config.h`.
-
-### FreeRTOS Tasks
-
-| Task | Core | Priority | Main Loop |
-|------|------|----------|-----------|
-| `ElectromagnetTask` | 1 | 4 | Drive N electromagnets in a repeating pattern with fixed frame length for synchronized localization |
-| `CommunicatorTask` | 0 | 3 | Poll command queue from serial, ESP-NOW broadcast to bots, collect ACK/NACK/mag field responses into response queues |
-| `SerialTask` | 0 | 3 | Parse incoming USB serial CSV, enqueue structured commands |
-| `GUITask` | 0 | 2 | Serve web interface for position tracking and manual control (conditional on `ENABLE_WEB_GUI`) |
-| `JoystickTask` | 1 | 2 | Read joystick input and send real-time steering commands (conditional on `ENABLE_JOYSTICK_MODE`) |
-| `LEDStatusTask` | 0 | 1 | Status LED indicator |
-
----
-
-## MiniBot Firmware
-
-Source: `firmware/MiniBot_StepperClient/`
-
-Built with PlatformIO. Device ID is read from NVS at boot. CPU runs at 80 MHz for
-power efficiency. All tasks are created in `main.cpp`; configuration constants are
-in `include/config.h`.
-
-Note: Status LED task is disabled on v3 boards and left commented out for future use.
-
-### FreeRTOS Tasks
-
-| Task | Priority | Main Loop |
-|------|----------|-----------|
-| `KinematicsController` | 5 | Dequeue `MotionCommand`, compute inverse kinematics (Cartesian to wheel velocities), drive steppers via ESP32 RMT peripheral; also handles `MotorTestQueue` for direct velocity commands |
-| `PositionEstimator_Sensor` | 4 | Read MMC5633 magnetometer at 2 kHz, detect sync frame start (3 short pulses), timestamp samples per electromagnet slot, post complete `EmagFrameData` to internal queue |
-| `EspNowCommunicator` | 3 | Receive ESP-NOW messages, dispatch to `MotionQueue` or `MotorTestQueue`, send `AckMessage` or `NackMessage` back to server; manages radio duty cycling for power savings |
-| `PositionEstimator_Calc` | 2 | Dequeue `EmagFrameData`, trilaterate position and orientation from 2-3 electromagnet readings, apply confidence-weighted low-pass filter, call `robot.setTruePose()` |
-| `BatteryMonitor` | 1 | ADC read battery voltage every 500 ms (20-sample running average, 1.84x divider ratio), update robot state; if voltage drops below 3.2 V, send `ERR_LOW_BATTERY` and suspend all other tasks |
-
-The `KinematicsController` uses the ESP32 RMT peripheral to generate stepper pulse
-trains at a constant frequency without blocking the CPU. The STSPIN220 drivers are
-hardwired to 1/128 microstepping (160 microsteps/rev at the motor's 20 full steps/rev).
-
-Inter-task communication uses FreeRTOS queues wrapped in `MotionQueue` and
-`MotorTestQueue` helper modules.
+**Radio duty cycling** is tied to sync health. After a successful sync, each bot
+enables duty cycling to save power. If sync becomes stale, the radio reverts to
+always-on so the Server can reach the bot to re-establish sync.
 
 ---
 
 ## Localization
 
-The Server's `ElectromagnetTask` fires electromagnets in a repeating frame.
-Each slot is X ms forward + X ms reverse, with a known timing offset between slots.
-The Server also broadcasts a `PosSync` message so each MiniBot knows when to expect
-the frame.
+The Server fires each electromagnet in sequence as part of a repeating frame. Each
+slot has a brief forward and reverse pulse to produce a detectable field, with a
+known timing offset between slots.
 
-On each MiniBot, `PositionEstimator_SensorTask` reads the MMC5633 magnetometer
-continuously at 1 kHz. After receiving a valid sync command from the server, it
-timestamps each collected sample relative to the frame start. Samples are assigned 
-to their electromagnet slot by timing alone.
+On each MiniBot, `PositionEstimator_SensorTask` reads the magnetometer
+continuously. Once a valid sync time is set, it timestamps each sample relative to
+the frame start and assigns samples to their electromagnet slot by timing alone.
 
 Once a complete frame is collected, `PositionEstimator_CalcTask` performs
-trilateration using the field strength readings from the 2-3 closest electromagnets 
-and their known board positions. This yields an (x, y, orientation) estimate with
-a confidence score. The confidence score is used to weight a low-pass filter before 
-the result is committed to the robot's true pose via `robot.setTruePose()`.
+trilateration using the field strength readings from the closest electromagnets and
+their known board positions. This yields an (x, y, orientation) estimate with a
+confidence score, which is used to weight a low-pass filter before the result is
+committed to the robot's true pose via `robot.setTruePose()`.
 
 ---
 
@@ -253,7 +174,7 @@ the result is committed to the robot's true pose via `robot.setTruePose()`.
 Current board designs are in `pcbs/`:
 
 - `pcbs/MiniBot_MainBoard/` -- MiniBot PCB (ESP32-C3, stepper drivers, magnetometer, LiPo charger)
-- `pcbs/Server_Motherboard/` -- Motherboard (ESP32, electromagnet drivers, connectors)
+- `pcbs/Server_Motherboard/` -- Motherboard (ESP32-C3, electromagnet drivers, connectors)
 
 Gerber files are in the `GERBERS/` subdirectory of each board folder.
 
@@ -262,31 +183,11 @@ https://cad.onshape.com/documents/4f8eaef75458146767928ab5/w/f159d6d65b9091531e1
 
 ---
 
-## Build and Setup
+## Firmware
 
-### MiniBot Firmware and Server Firmware
+Each firmware project has its own README with task breakdowns, key objects, and
+build instructions.
 
-Both use PlatformIO. Open the respective folder in VS Code with the PlatformIO
-extension installed, or use the CLI:
-
-```bash
-# Build and upload (from firmware/MiniBot_StepperClient or firmware/MiniBot_Server)
-pio run --target upload
-```
-
-Before flashing a MiniBot, write its device ID to NVS using the provisioning
-utility or set it directly via the serial console.
-
-### Coordinator
-
-Requires Python 3.10+ and PyQt6.
-
-```bash
-cd firmware/MiniBot_Coordinator
-pip install pyqt6 pyserial
-python main.py
-```
-
-Connect the Server ESP32 over USB before launching. Select the serial port from
-the System Control tab, and the Coordinator will begin receiving position updates
-as bots are powered on.
+- `firmware/MiniBot_Coordinator/` -- Python/PyQt6 host application
+- `firmware/MiniBot_Server/` -- ESP32 motherboard firmware (PlatformIO)
+- `firmware/MiniBot_StepperClient/` -- ESP32-C3 per-bot firmware (PlatformIO)
