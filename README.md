@@ -31,7 +31,8 @@ Per-bot hardware cost is approximately $4 excluding PCB.
 
 The system has three layers:
 
-**Coordinator** is a Python/PyQt6 application running on a Raspberry Pi. It holds
+**Coordinator** is a Python/PyQt6 application intended to run on Raspberry Pi, 
+though it could run on a more powerful computer if desired. It holds
 board state, runs path planning, drives the GUI, and sends motion commands to the
 Server over USB serial.
 
@@ -52,13 +53,13 @@ and battery management entirely onboard.
 
 | Component | Details |
 |-----------|---------|
-| MCU | ESP32-C3 (RISC-V, 80 MHz, 2.4 GHz WiFi) |
+| MCU | ESP32-C3 (RISC-V, 80 MHz underclock, 2.4 GHz WiFi) |
 | Motors | 2x PMO8-2 miniature stepper motors |
 | Motor drivers | STSPIN220 (1/128 microstepping mode) |
 | Magnetometer | MMC5633NJL (I2C) |
-| Power | 150 mAh LiPo |
-| Chassis | Fully 3D printed; 2x M2x5mm bolts for motors, 2x 9mm ID o-rings for tires |
-| PCB | Custom; fits in the base of the chassis |
+| Power | 170 mAh LiPo |
+| Chassis | Fully 3D printed; 2x M2x5mm bolts , 2x 7mm ID 10mm OD o-rings |
+| PCB | Custom 4-layer; fits in the base of the chassis |
 
 Physical constants: wheel radius 5.25 mm, wheel spacing 23.4 mm, 160 microsteps/rev.
 
@@ -66,8 +67,8 @@ Physical constants: wheel radius 5.25 mm, wheel spacing 23.4 mm, 160 microsteps/
 
 | Component | Details |
 |-----------|---------|
-| MCU | ESP32 (Xtensa dual-core, 240 MHz) |
-| Electromagnets | 3x, positioned at fixed known coordinates on the board |
+| MCU | ESP32-C3 (RISC-V, 160 MHz, 2.4 GHz WiFi) |
+| Electromagnets | Up to 20x, positioned at fixed known coordinates on the board |
 | Interface | USB serial to Raspberry Pi (921600 baud) |
 | WiFi | Soft AP, SSID `ChessBot-Server`, channel 6, IP `192.168.4.1` |
 
@@ -156,8 +157,7 @@ Two planners derive from `BasePlanner`:
 - `QueuedPlanner`: Pieces move one at a time in ascending ID order. Each command
   gets an incrementing `sequence_num` that the dispatcher uses for ordering.
 
-Both accept an optional `validator(piece_id, x, y) -> bool` callback for chess
-legality checks.
+Both of these currently suck. Really bad. This stuff needs a lotta work.
 
 ### Serial Handler (comms/)
 
@@ -190,9 +190,9 @@ constants are in `include/config.h`.
 
 | Task | Core | Priority | Main Loop |
 |------|------|----------|-----------|
+| `ElectromagnetTask` | 1 | 4 | Drive N electromagnets in a repeating pattern with fixed frame length for synchronized localization |
 | `CommunicatorTask` | 0 | 3 | Poll command queue from serial, ESP-NOW broadcast to bots, collect ACK/NACK/mag field responses into response queues |
 | `SerialTask` | 0 | 3 | Parse incoming USB serial CSV, enqueue structured commands |
-| `ElectromagnetTask` | 1 | 4 | Drive 3 electromagnets in a repeating 100 ms frame (7 ms forward + 7 ms reverse per slot) for synchronized localization |
 | `GUITask` | 0 | 2 | Serve web interface for position tracking and manual control (conditional on `ENABLE_WEB_GUI`) |
 | `JoystickTask` | 1 | 2 | Read joystick input and send real-time steering commands (conditional on `ENABLE_JOYSTICK_MODE`) |
 | `LEDStatusTask` | 0 | 1 | Status LED indicator |
@@ -214,8 +214,8 @@ Note: Status LED task is disabled on v3 boards and left commented out for future
 | Task | Priority | Main Loop |
 |------|----------|-----------|
 | `KinematicsController` | 5 | Dequeue `MotionCommand`, compute inverse kinematics (Cartesian to wheel velocities), drive steppers via ESP32 RMT peripheral; also handles `MotorTestQueue` for direct velocity commands |
-| `EspNowCommunicator` | 3 | Receive ESP-NOW messages, dispatch to `MotionQueue` or `MotorTestQueue`, send `AckMessage` or `NackMessage` back to server; manages radio duty cycling for power savings |
 | `PositionEstimator_Sensor` | 4 | Read MMC5633 magnetometer at 2 kHz, detect sync frame start (3 short pulses), timestamp samples per electromagnet slot, post complete `EmagFrameData` to internal queue |
+| `EspNowCommunicator` | 3 | Receive ESP-NOW messages, dispatch to `MotionQueue` or `MotorTestQueue`, send `AckMessage` or `NackMessage` back to server; manages radio duty cycling for power savings |
 | `PositionEstimator_Calc` | 2 | Dequeue `EmagFrameData`, trilaterate position and orientation from 2-3 electromagnet readings, apply confidence-weighted low-pass filter, call `robot.setTruePose()` |
 | `BatteryMonitor` | 1 | ADC read battery voltage every 500 ms (20-sample running average, 1.84x divider ratio), update robot state; if voltage drops below 3.2 V, send `ERR_LOW_BATTERY` and suspend all other tasks |
 
@@ -230,54 +230,21 @@ Inter-task communication uses FreeRTOS queues wrapped in `MotionQueue` and
 
 ## Localization
 
-The Server's `ElectromagnetTask` fires 3 electromagnets in a repeating 100 ms frame.
-Each slot is 7 ms forward + 7 ms reverse, with a known timing offset between slots.
+The Server's `ElectromagnetTask` fires electromagnets in a repeating frame.
+Each slot is X ms forward + X ms reverse, with a known timing offset between slots.
 The Server also broadcasts a `PosSync` message so each MiniBot knows when to expect
 the frame.
 
 On each MiniBot, `PositionEstimator_SensorTask` reads the MMC5633 magnetometer
-continuously at 2 kHz. It detects the frame start via 3 short sync pulses, then
-timestamps each subsequent sample relative to that start. Samples are assigned to
-their electromagnet slot by timing alone.
+continuously at 1 kHz. After receiving a valid sync command from the server, it
+timestamps each collected sample relative to the frame start. Samples are assigned 
+to their electromagnet slot by timing alone.
 
 Once a complete frame is collected, `PositionEstimator_CalcTask` performs
-trilateration using the field strength readings from 2-3 electromagnets and their
-known board positions. This yields an (x, y, orientation) estimate with a confidence
-score. The confidence score is used to weight a low-pass filter before the result is
-committed to the robot's true pose via `robot.setTruePose()`.
-
----
-
-## Critical Objects
-
-### Coordinator
-
-| Object | Source | Purpose |
-|--------|--------|---------|
-| `Piece` | `models/piece.py` | One robot: ID, color, rank, position (mm), orientation (deg), battery voltage, capture/staged flags, last update timestamp |
-| `BoardState` | `models/piece.py` | Container for all 34 `Piece` objects; home positions; accessors by ID, color, or active state |
-| `MoveCommand` | `planning/base_planner.py` | Planner output: `piece_id`, `target_x_mm`, `target_y_mm`, `target_theta`, `duration_ms`, `sequence_num` |
-| `ParsedMessage` | `comms/protocol.py` | Structured representation of one incoming serial line: type, position, battery, timestamp, error code |
-
-### Server
-
-| Object | Source | Purpose |
-|--------|--------|---------|
-| `PositionCommand` | `ESPNowMessages.h` | ESP-NOW command to a bot: target ID, x/y/theta, move duration |
-| `AckMessage` | `ESPNowMessages.h` | Response from a bot: ID, x/y/theta, battery voltage, timestamp |
-| `MotTestCommand` | `ESPNowMessages.h` | Direct motor velocity command for testing |
-| `PosSync` | `ESPNowMessages.h` | Sync broadcast with electromagnet frame timing |
-
-### MiniBot
-
-| Object | Source | Purpose |
-|--------|--------|---------|
-| `Robot` | `robot.h` | Central state: position, orientation, true pose estimate, battery voltage, system status; shared by all tasks |
-| `StepperDriver` | `stepper.h` | One wheel: step/dir GPIO control, direction, RMT channel, microstepping mode |
-| `MotionCommand` | `messages_ipc.h` | IPC struct passed through `MotionQueue`: target x/y/theta + duration |
-| `MotorTestRequest` | `messages_ipc.h` | IPC struct passed through `MotorTestQueue`: left/right wheel velocities (rad/s) |
-| `EmagFrameData` | `position_estimator.h` | One complete localization frame: magnetic field samples for each electromagnet slot + background |
-| `CalculatedPosition` | `position_estimator.h` | Trilateration result: x, y, orientation, confidence score |
+trilateration using the field strength readings from the 2-3 closest electromagnets 
+and their known board positions. This yields an (x, y, orientation) estimate with
+a confidence score. The confidence score is used to weight a low-pass filter before 
+the result is committed to the robot's true pose via `robot.setTruePose()`.
 
 ---
 
