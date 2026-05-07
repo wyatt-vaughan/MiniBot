@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include "config.h"
 #if ENABLE_JOYSTICK_MODE
   #include "JoystickTask.h"
@@ -33,6 +34,7 @@ void setup() {
   WiFi.softAP(ssid, password, wifiChannel);
   #else
   WiFi.mode(WIFI_STA);
+  esp_wifi_set_channel(wifiChannel, WIFI_SECOND_CHAN_NONE);
   #endif
   
 

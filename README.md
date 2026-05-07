@@ -73,18 +73,34 @@ onboard magnetometers. This is the primary localization mechanism.
 
 ## Communication Pathways
 
-```
-Coordinator (Raspberry Pi)
-    |
-    |  USB Serial -- CSV protocol, newline-terminated
-    |  Format: >type,args
-    |
-Server ESP32 (Motherboard)
-    |
-    |  ESP-NOW -- 2.4 GHz, broadcast + unicast
-    |  Binary packed structs
-    |
-MiniBot #1 ... MiniBot #34 (ESP32-C3)
+```mermaid
+flowchart TD
+    subgraph Coordinator["Coordinator (Raspberry Pi)"]
+        GUI["GUI / Path Planner"]
+        SH["SerialHandler\n(QThread)"]
+        GUI -->|MoveCommand list| SH
+    end
+
+    subgraph Server["Server (Motherboard ESP32)"]
+        ST["SerialTask"]
+        CT["CommunicatorTask"]
+        ET["ElectromagnetTask"]
+        ST -->|CommandMessage| CT
+    end
+
+    subgraph Bots["MiniBot #1 ... #34 (ESP32-C3)"]
+        COMM["EspNowCommunicator"]
+        KIN["KinematicsController"]
+        PE["PositionEstimator"]
+        COMM -->|MotionCommand| KIN
+        COMM -->|sync time| PE
+    end
+
+    SH -->|"CSV >type,args\nUSB Serial"| ST
+    CT -->|"ESP-NOW broadcast\nPositionCommand / PosSync"| COMM
+    COMM -->|"ESP-NOW unicast\nAckMessage / NackMessage"| CT
+    CT -->|"CSV >3 ACK / >4 NACK\nUSB Serial"| SH
+    ET -.->|"electromagnetic\nframe pulses"| PE
 ```
 
 ### CSV Protocol (Host to Server)
