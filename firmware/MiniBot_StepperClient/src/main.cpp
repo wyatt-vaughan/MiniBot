@@ -29,6 +29,30 @@ static TaskHandle_t position_estimator_calc_task_handle = NULL;
 static TaskHandle_t battery_monitor_task_handle = NULL;
 static TaskHandle_t led_status_task_handle = NULL;
 
+static bool initialize_status_led(void) {
+    BaseType_t task_created = xTaskCreate(
+        LedStatus_Task,
+        "LedStatus",
+        1024,
+        (void*)&robot,
+        LED_STATUS_PRIORITY,
+        &led_status_task_handle
+    );
+    if (task_created != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create LED Status task");
+        return false;
+    }
+    ESP_LOGI(TAG, "LED Status task created successfully");
+
+    if (!LedStatus_Init(LED_PIN)) {
+        ESP_LOGE(TAG, "Failed to initialize LED status");
+        return false;
+    }
+    ESP_LOGI(TAG, "LED status initialized successfully");
+
+    return true;
+}
+
 static bool create_tasks(void) {
     BaseType_t task_created;
     
@@ -37,7 +61,7 @@ static bool create_tasks(void) {
         "KinematicsController",
         8192,
         (void*)&robot,
-        5,
+        KINEMATICS_TASK_PRIORITY,
         &kinematics_task_handle
     );
     if (task_created != pdPASS) {
@@ -51,7 +75,7 @@ static bool create_tasks(void) {
         "EspNowCommunicator",
         2048,
         (void*)&robot,
-        3,
+        ESP_NOW_COMM_PRIORITY,
         &communicator_task_handle
     );
     if (task_created != pdPASS) {
@@ -65,7 +89,7 @@ static bool create_tasks(void) {
         "PositionEstimatorSensor",
         4096,
         (void*)&robot,
-        4,
+        POSITION_EST_SENSOR_PRIORITY,
         &position_estimator_sensor_task_handle
     );
     if (task_created != pdPASS) {
@@ -79,7 +103,7 @@ static bool create_tasks(void) {
         "PositionEstimatorCalc",
         4096,
         (void*)&robot,
-        2,
+        POSITION_EST_CALC_PRIORITY,
         &position_estimator_calc_task_handle
     );
     if (task_created != pdPASS) {
@@ -101,7 +125,7 @@ static bool create_tasks(void) {
         "BatteryMonitor",
         2048,
         (void*)&battery_monitor_params,
-        1,
+        BATTERY_MONITOR_PRIORITY,
         &battery_monitor_task_handle
     );
     if (task_created != pdPASS) {
@@ -109,21 +133,6 @@ static bool create_tasks(void) {
         return false;
     }
     ESP_LOGI(TAG, "Battery Monitor task created successfully");
-    
-    // No Status LED on V3 boards, keep for future use
-    // task_created = xTaskCreate(
-    //     LedStatus_Task,
-    //     "LedStatus",
-    //     1024,
-    //     (void*)&robot,
-    //     1,
-    //     &led_status_task_handle
-    // );
-    // if (task_created != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create LED Status task");
-    //     return false;
-    // }
-    // ESP_LOGI(TAG, "LED Status task created successfully");
     
     return true;
 }
@@ -173,18 +182,21 @@ static bool initialize_modules(void) {
     }
     ESP_LOGI(TAG, "Battery monitor initialized successfully");
     
-    // if (!LedStatus_Init(2)) {
-    //     ESP_LOGE(TAG, "Failed to initialize LED status");
-    //     return false;
-    // }
-    // ESP_LOGI(TAG, "LED status initialized successfully");
-    
     return true;
 }
 
 void setup() {
     Serial.begin(115200);
     delay(100);
+
+    // Initialize status led first to indicate if any errors occur
+    if (!initialize_status_led()) {
+        while (1) {
+            ESP_LOGE(TAG, "Failed to initialize status LED");
+            delay(1000);
+        }
+    }
+    LedStatus_SetStatus(LED_STATUS_STARTUP);
 
     // Set component log levels
     esp_log_level_set("*", ESP_LOG_ERROR);
@@ -213,8 +225,9 @@ void setup() {
     ESP_LOGI(TAG, "Initializing FreeRTOS framework...");
     
     if (!initialize_modules()) {
-        ESP_LOGE(TAG, "FATAL: Module initialization failed");
+        LedStatus_SetStatus(LED_STATUS_ERROR);
         while (1) {
+            ESP_LOGE(TAG, "FATAL: Module initialization failed");
             delay(1000);
         }
     }
@@ -223,8 +236,9 @@ void setup() {
     ESP_LOGI(TAG, "Creating FreeRTOS tasks...");
     
     if (!create_tasks()) {
-        ESP_LOGE(TAG, "FATAL: Task creation failed");
+        LedStatus_SetStatus(LED_STATUS_ERROR);
         while (1) {
+            ESP_LOGE(TAG, "FATAL: Task creation failed");
             delay(1000);
         }
     }
@@ -234,6 +248,8 @@ void setup() {
     ESP_LOGI(TAG, "Core 1: Kinematics Controller");
 
     setCpuFrequencyMhz(80);
+
+    LedStatus_SetStatus(LED_STATUS_READY);
 }
 
 void loop() {

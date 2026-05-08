@@ -56,7 +56,6 @@ private:
     bool _continuous_mode;
     uint32_t rawX = 0, rawY = 0, rawZ = 0;
     uint32_t _lastX = UINT32_MAX, _lastY = UINT32_MAX, _lastZ = UINT32_MAX;
-    int8_t rawTemp = 0;
 
     bool waitForMeasurementDone(uint32_t timeout_ms);
     void unpackRawXYZFromBuffer(const uint8_t *buf, size_t len);

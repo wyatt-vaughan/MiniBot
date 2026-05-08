@@ -492,18 +492,24 @@ void PositionEstimator_SensorTask(void* pvParameters) {
         int64_t current_micros = esp_timer_get_time();
 
         if (current_state == STATE_MEASURING) {
-            // ---- Attempt immediate read — no polling, no blocking wait ----
             reads_attempted++;
             if (!mag.readMeasurement()) {
-                reads_stale++;
-                // Data not yet ready; retry in 100 µs (well within the overwrite window)
-                esp_timer_start_once(s_sample_timer, 100);
-                ESP_LOGD(TAG, "Stale read (total stale: %lu), retrying in 100 us", reads_stale);
-                continue;
+                // Busy-wait up to 3 × 50 µs for data to become ready
+                bool ready = false;
+                for (int retry = 0; retry < 3; retry++) {
+                    esp_rom_delay_us(50);
+                    reads_stale++;
+                    if (mag.readMeasurement()) { ready = true; break; }
+                }
+                if (!ready) {
+                    ESP_LOGD(TAG, "Stale read unresolved after retries (total stale: %lu)", reads_stale);
+                    continue;
+                }
             }
 
+            // Invert y and z to account for sensor orientation
             float mx = mag.getFieldGaussX();
-            float my = -mag.getFieldGaussY();  // Sensor is mounted upside-down (flipped around X-axis)
+            float my = -mag.getFieldGaussY();
             float mz = -mag.getFieldGaussZ();
 
             avgX.add(mx);
@@ -519,8 +525,8 @@ void PositionEstimator_SensorTask(void* pvParameters) {
             // Serial.printf("%ld us  \tmx: %.3f\tmy: %.3f\tmz: %.3f\n", frame_elapsed_us, mx, my, mz);
 
             if (emag_index >= EMAG_COUNT) {
-                // Frame complete — log perf, post to queue and return to IDLE
-                // Do NOT reschedule the timer; it will remain stopped in IDLE
+                // Frame complete — stop the periodic timer and return to IDLE
+                esp_timer_stop(s_sample_timer);
                 float miss_pct = (reads_attempted > 0) ? (100.0f * reads_stale / reads_attempted) : 0.0f;
                 ESP_LOGI(TAG, "Frame complete: %lu reads, %lu stale (%.1f%% miss)",
                              reads_attempted, reads_stale, miss_pct);
@@ -538,9 +544,7 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                 continue;
             }
 
-            // Frame still in progress — reschedule timer for next sample
-            esp_timer_start_once(s_sample_timer, EMAG_MIN_SAMPLE_PERIOD_US);
-
+            // Periodic timer keeps running — no re-arm needed
             int64_t offset_us = frame_elapsed_us % slot_us;
 
             // Forward active window (trim leading and trailing edges)
@@ -579,8 +583,8 @@ void PositionEstimator_SensorTask(void* pvParameters) {
                     frame_start_time_us = next_frame_time_us;
                     memset(&current_frame, 0, sizeof(current_frame));
                     current_state = STATE_MEASURING;
-                    esp_timer_start_once(s_sample_timer, EMAG_MIN_SAMPLE_PERIOD_US);
-                    ESP_LOGD(TAG, "Starting new emag frame at %lld us, timer started", frame_start_time_us);
+                    esp_timer_start_periodic(s_sample_timer, EMAG_MIN_SAMPLE_PERIOD_US);
+                    ESP_LOGD(TAG, "Starting new emag frame at %lld us, periodic timer started", frame_start_time_us);
                 } else {
                     int64_t delay_ms = (time_to_next_frame_us / 1000) - 1;
                     // TODO make sure SR is run every 1s even if no state changes

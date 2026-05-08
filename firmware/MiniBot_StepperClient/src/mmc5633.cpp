@@ -13,11 +13,11 @@ bool MMC5633NJL::begin(int sda_pin, int scl_pin, uint32_t i2c_freq) {
     if (sda_pin >= 0 && scl_pin >= 0) _wire.begin(sda_pin, scl_pin, i2c_freq);
     else _wire.begin();
 
-    delay(5);
+    vTaskDelay(pdMS_TO_TICKS(5));
 
     // Reset chip and check product ID
     if (!writeRegister(REG_CTRL1, 0x80)) return false;
-    delay(20);
+    vTaskDelay(pdMS_TO_TICKS(20));
     uint8_t pid = 0;
     if (!readRegister(REG_PRODUCT_ID, &pid)) return false;
     if (pid != 0x10) return false;
@@ -44,7 +44,6 @@ bool MMC5633NJL::readMeasurement(uint32_t timeout_ms) {
         uint8_t buf[9] = {0};
         if (!readRegisters(REG_XOUT0, buf, 9)) return false;
         unpackRawXYZFromBuffer(buf, 9);
-        rawTemp = buf[8];
         if (rawX == _lastX && rawY == _lastY && rawZ == _lastZ) return false;
         _lastX = rawX; _lastY = rawY; _lastZ = rawZ;
         return true;
@@ -52,14 +51,10 @@ bool MMC5633NJL::readMeasurement(uint32_t timeout_ms) {
         // On-demand mode: trigger measurement and wait
         uint8_t ctrl0 = (1 << 5) | (1 << 0);
         if (!writeRegister(REG_CTRL0, ctrl0)) return false;
-
         if (!waitForMeasurementDone(timeout_ms)) return false;
-
         uint8_t buf[9] = {0};
         if (!readRegisters(REG_XOUT0, buf, 9)) return false;
-
         unpackRawXYZFromBuffer(buf, 9);
-        rawTemp = buf[8];
         return true;
     }
 }
@@ -75,10 +70,10 @@ bool MMC5633NJL::enableContinuousMode() {
     if (!writeRegister(REG_CTRL1, 0x03)) return false;
     if (!writeRegister(REG_ODR,   0xFF)) return false;
     if (!writeRegister(REG_CTRL0, 0x80)) return false;
-    delay(2);
+    vTaskDelay(pdMS_TO_TICKS(2));
     if (!writeRegister(REG_CTRL2, 0x90)) return false;
     if (!writeRegister(REG_CTRL2, 0x90)) return false;
-    delay(2);
+    vTaskDelay(pdMS_TO_TICKS(2));
 
     _continuous_mode = true;
     return true;
@@ -116,7 +111,7 @@ bool MMC5633NJL::runSelfTest(uint32_t timeout_ms) {
         if ((status & STAT1_SAT_SENSOR) == 0) {
             return true;
         }
-        delay(1);
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     return false;

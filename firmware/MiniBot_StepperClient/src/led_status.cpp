@@ -70,8 +70,7 @@ void LedStatus_Task(void* pvParameters) {
         switch (current_led_status) {
             case LED_STATUS_STARTUP:
                 led_brightness = 127;
-                blink_pattern(3, 200, 200);
-                vTaskDelay(pdMS_TO_TICKS(1000));
+                breathing_fast(led_pin);
                 break;
                 
             case LED_STATUS_READY:

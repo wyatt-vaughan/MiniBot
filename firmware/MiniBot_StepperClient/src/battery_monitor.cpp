@@ -4,6 +4,7 @@
 #define LOG_LOCAL_LEVEL LOG_LEVEL_BATTERY
 #include "esp_log.h"
 #include "config.h"
+#include "led_status.h"
 
 static const char* TAG = "BATTERY";
 
@@ -44,6 +45,7 @@ void BatteryMonitor_Task(void* pvParameters) {
         // Check for low battery condition and send alert
         if (robot->getBatteryCritical()) {
             if (!low_battery_alerted) {
+                LedStatus_SetStatus(LED_STATUS_LOW_BATTERY);
                 ESP_LOGW(TAG, "LOW BATTERY DETECTED: %.2fV",
                               current_voltage);
                 if (EspNowCommunicator_SendAlert(ERR_LOW_BATTERY)) {
