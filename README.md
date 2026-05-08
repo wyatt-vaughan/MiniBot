@@ -86,6 +86,7 @@ flowchart TD
         CT["CommunicatorTask"]
         ET["ElectromagnetTask"]
         ST -->|CommandMessage| CT
+        CT -->|GUIStatus| ST
     end
 
     subgraph Bots["MiniBot #1 ... #34 (ESP32-C3)"]
@@ -96,10 +97,10 @@ flowchart TD
         COMM -->|sync time| PE
     end
 
-    SH -->|"CSV >type,args\nUSB Serial"| ST
-    CT -->|"ESP-NOW broadcast\nPositionCommand / PosSync"| COMM
-    COMM -->|"ESP-NOW unicast\nAckMessage / NackMessage"| CT
-    CT -->|"CSV >3 ACK / >4 NACK\nUSB Serial"| SH
+    SH -->|"Serial CSV Commands"| ST
+    ST -->|"Serial CSV Responses"| SH
+    CT -->|"ESP-NOW\nbroadcast / unicast Commands"| COMM
+    COMM -->|"ESP-NOW unicast\nACK / NACK"| CT
     ET -.->|"electromagnetic\nframe pulses"| PE
 ```
 

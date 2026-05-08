@@ -14,8 +14,8 @@ configuration constants are in `include/config.h`.
 | Task | Core | Priority | Main Loop |
 |------|------|----------|-----------|
 | `ElectromagnetTask` | 1 | 4 | Drive electromagnets in a repeating timed frame for synchronized localization |
-| `CommunicatorTask` | 0 | 3 | Poll command queue from serial, ESP-NOW broadcast to bots, collect ACK/NACK/mag field responses |
-| `SerialTask` | 0 | 3 | Parse incoming USB serial CSV, enqueue structured commands |
+| `ESPNowTask` | 0 | 3 | Poll command queue, ESP-NOW broadcast to bots, collect ACK/NACK/mag field responses |
+| `SerialTask` | 0 | 3 | Parse incoming USB serial CSV, enqueue structured commands, package outgoing serial commands |
 | `GUITask` | 0 | 2 | Serve web interface for position tracking and manual control (conditional on `ENABLE_WEB_GUI`) |
 | `JoystickTask` | 1 | 2 | Read joystick input and send real-time steering commands (conditional on `ENABLE_JOYSTICK_MODE`) |
 | `LEDStatusTask` | 0 | 1 | Status LED indicator |

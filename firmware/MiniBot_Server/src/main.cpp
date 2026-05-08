@@ -7,7 +7,7 @@
 #else
   #include "GUITask.h"
 #endif
-#include "CommunicatorTask.h"
+#include "ESPNowTask.h"
 #include "QueueStructs.h"
 #include "ElectromagnetTask.h"
 #include "LEDStatusTask.h"
@@ -84,12 +84,12 @@ void setup() {
   #endif
   
   xTaskCreatePinnedToCore(
-    communicatorTask,  // Task function
-    "Comm Task",       // Task name
+    espNowTask,        // Task function
+    "ESP-NOW Task",    // Task name
     4096,              // Stack size (bytes)
     NULL,              // Parameter
     3,                 // Priority
-    &commTaskHandle,   // Task handle
+    &espNowTaskHandle, // Task handle
     0                  // Core (0 or 1)
   );
   

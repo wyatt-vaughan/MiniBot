@@ -1,11 +1,11 @@
-#include "CommunicatorTask.h"
+#include "ESPNowTask.h"
 #include "QueueStructs.h"
 #include "ElectromagnetTask.h"
 #include "config.h"
 #include <esp_timer.h>
 
 // Task handle
-TaskHandle_t commTaskHandle = NULL;
+TaskHandle_t espNowTaskHandle = NULL;
 
 // Store peer MAC addresses (broadcast by default)
 uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -143,9 +143,9 @@ void initESPNow() {
   }
 }
 
-// FreeRTOS Communicator Task
-void communicatorTask(void *parameter) {
-  DEBUG_PRINTLN("Communicator Task started");
+// FreeRTOS ESP-NOW Task
+void espNowTask(void *parameter) {
+  DEBUG_PRINTLN("ESP-NOW Task started");
   
   CommandMessage msg;
   
