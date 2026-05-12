@@ -253,6 +253,8 @@ class PathPlanningTab(QWidget):
                 f" → ({cmd.target_x_mm:.0f}, {cmd.target_y_mm:.0f}) mm"
                 f"  {cmd.duration_ms} ms"
             )
+            if cmd.planner_debug:
+                label += f"  | {cmd.planner_debug}"
             self._queue_list.addItem(QListWidgetItem(label))
 
     def _rebuild_piece_combo(self) -> None:

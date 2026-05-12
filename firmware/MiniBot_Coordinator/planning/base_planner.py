@@ -37,6 +37,7 @@ class MoveCommand:
         duration_ms:   Time budget for the move in milliseconds.
         sequence_num:  Planner-assigned ordering. Lower numbers move first.
         uci_move:      Optional algebraic notation for chess engine logging.
+        planner_debug: Optional planner debug note for queue/log visibility.
     """
     piece_id:     int
     target_x_mm:  float
@@ -45,6 +46,7 @@ class MoveCommand:
     duration_ms:  int             = PLANNING.DEFAULT_MOVE_DURATION_MS
     sequence_num: int             = 0
     uci_move:     Optional[str]   = None
+    planner_debug: Optional[str]  = None
 
     def distance_mm(self, from_x: float, from_y: float) -> float:
         """Euclidean distance from a given origin to this command's target."""

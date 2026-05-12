@@ -35,6 +35,7 @@ class DebugTab(QWidget):
     send_raw                  = pyqtSignal(bytes)
     simulator_mode_changed    = pyqtSignal(bool)   # True = simulator active
     hide_stale_pieces_changed = pyqtSignal(bool)   # True = hide pieces unseen >5s
+    randomize_positions       = pyqtSignal()        # scatter all pieces randomly
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -129,6 +130,15 @@ class DebugTab(QWidget):
         speed_row.addStretch()
         sl.addLayout(speed_row)
 
+        self._btn_randomize = QPushButton('Randomize Positions')
+        self._btn_randomize.setToolTip(
+            'Scatter all active pieces to random positions, ensuring at least\n'
+            '5 mm of spacing between any two pieces.'
+        )
+        self._btn_randomize.setEnabled(False)
+        self._btn_randomize.clicked.connect(self.randomize_positions)
+        sl.addWidget(self._btn_randomize)
+
         root.addWidget(sim_group)
 
         # --- Display options ---
@@ -198,6 +208,7 @@ class DebugTab(QWidget):
     def _on_sim_toggled(self, enabled: bool) -> None:
         mode_str = 'ON' if enabled else 'OFF'
         self._log.append(f'[SIM] Simulator mode {mode_str}')
+        self._btn_randomize.setEnabled(enabled)
         self.simulator_mode_changed.emit(enabled)
 
     # ------------------------------------------------------------------

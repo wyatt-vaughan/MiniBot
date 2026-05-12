@@ -24,8 +24,9 @@ Signal routing summary:
 from __future__ import annotations
 
 import math
+import random
 import time
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from PyQt6.QtCore import QTimer, pyqtSlot
 from PyQt6.QtWidgets import (
@@ -35,7 +36,7 @@ from PyQt6.QtWidgets import (
 
 from comms.protocol import build_position_request, build_position_command
 from comms.serial_handler import SerialHandler
-from config import COMM, GUI, SIMULATOR
+from config import COMM, GUI, PIECES, PLANNING, SIMULATOR
 from models.piece import BoardState
 from planning.base_planner import MoveCommand
 from simulation.simulator import MotionSimulator
@@ -289,6 +290,14 @@ class MainWindow(QMainWindow):
         self._simulator  = MotionSimulator(self._board, parent=self)
         self._sim_mode   = False  # True when debug tab simulator is active
 
+        # Sequence-wave dispatcher state.
+        self._pending_waves: List[List[MoveCommand]] = []
+        self._active_wave_piece_ids: Set[int] = set()
+        self._wave_running: bool = False
+        self._wave_timer = QTimer(self)
+        self._wave_timer.setSingleShot(True)
+        self._wave_timer.timeout.connect(self._on_wave_timer_timeout)
+
         # Auto-poll timer (fires POLL at the configured interval when connected)
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(COMM.DEFAULT_POLL_INTERVAL_MS)
@@ -427,6 +436,7 @@ class MainWindow(QMainWindow):
         self._debug_tab.send_raw.connect(self._on_debug_send_raw)
         self._debug_tab.simulator_mode_changed.connect(self._on_sim_mode_changed)
         self._debug_tab.hide_stale_pieces_changed.connect(self._on_hide_stale_changed)
+        self._debug_tab.randomize_positions.connect(self._on_randomize_positions)
 
         # System control → send (always serial; system commands never simulated)
         self._sys_tab.send_raw.connect(self._handler.send)
@@ -452,6 +462,7 @@ class MainWindow(QMainWindow):
         # Simulator → board updates + debug log
         self._simulator.position_updated.connect(self._on_position_received)
         self._simulator.position_updated.connect(self._track_tab.on_position_received)
+        self._simulator.move_complete.connect(self._on_sim_move_complete)
         self._simulator.log_message.connect(self._debug_tab.on_sim_log)
 
     # ------------------------------------------------------------------
@@ -484,60 +495,17 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(list)
     def _on_send_move_commands(self, commands: List[MoveCommand]) -> None:
-        """Dispatch move commands to the simulator or serial handler."""
-        sorted_cmds = sorted(commands, key=lambda c: c.sequence_num)
+        """Dispatch commands in sequence-number waves.
 
-        if self._sim_mode:
-            # Update simulator speed from current debug tab setting
-            self._simulator.speed_mm_s = self._debug_tab.simulator_speed_mm_s
-            self._simulator.queue_moves(sorted_cmds)
-        else:
-            for cmd in sorted_cmds:
-                piece = self._board.get_piece(cmd.piece_id)
-                if piece is not None:
-                    dx = cmd.target_x_mm - piece.x_mm
-                    dy = cmd.target_y_mm - piece.y_mm
-                    dist = math.hypot(dx, dy)
-                    if dist > 1.0:
-                        fwd = math.degrees(math.atan2(dy, dx)) % 360.0
-                        bwd = (fwd + 180.0) % 360.0
-                        diff_fwd = abs((fwd - piece.orientation_deg + 180.0) % 360.0 - 180.0)
-                        diff_bwd = abs((bwd - piece.orientation_deg + 180.0) % 360.0 - 180.0)
-                        rotate_theta = fwd if diff_fwd <= diff_bwd else bwd
-                    else:
-                        rotate_theta = piece.orientation_deg
-                    # Command 1: rotate in place to face target
-                    rot_angle_deg = abs((rotate_theta - piece.orientation_deg + 180.0) % 360.0 - 180.0)
-                    if rot_angle_deg > 0.5:
-                        rot_duration_ms = max(1, int(
-                            math.radians(rot_angle_deg)
-                            / SIMULATOR.ROTATION_ANGULAR_VEL_RAD_S * 1000
-                        ))
-                        self._handler.send(build_position_command(
-                            cmd.piece_id,
-                            piece.x_mm,
-                            piece.y_mm,
-                            rotate_theta,
-                            rot_duration_ms,
-                        ))
-                    # Command 2: translate to target preserving the heading
-                    self._handler.send(build_position_command(
-                        cmd.piece_id,
-                        cmd.target_x_mm,
-                        cmd.target_y_mm,
-                        rotate_theta,
-                        cmd.duration_ms,
-                    ))
-                else:
-                    # No known position — send a single command as fallback
-                    theta = cmd.target_theta if cmd.target_theta is not None else 0.0
-                    self._handler.send(build_position_command(
-                        cmd.piece_id,
-                        cmd.target_x_mm,
-                        cmd.target_y_mm,
-                        theta,
-                        cmd.duration_ms,
-                    ))
+        All commands sharing the same sequence_num are sent in parallel as one
+        wave. Later waves are delayed until the active wave is considered done.
+        """
+        if not commands:
+            return
+
+        self._reset_wave_dispatch()
+        self._pending_waves = self._group_by_sequence(commands)
+        self._dispatch_next_wave()
 
     @pyqtSlot(bytes)
     def _on_debug_send_raw(self, data: bytes) -> None:
@@ -552,6 +520,7 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(bool)
     def _on_sim_mode_changed(self, enabled: bool) -> None:
+        self._reset_wave_dispatch()
         self._sim_mode = enabled
         if enabled:
             self._status_bar.showMessage('Simulator mode active')
@@ -561,6 +530,34 @@ class MainWindow(QMainWindow):
                 self._status_bar.showMessage('Connected')
             else:
                 self._status_bar.showMessage('Not connected')
+
+    @pyqtSlot()
+    def _on_randomize_positions(self) -> None:
+        """Scatter all active pieces to random positions with ≥5 mm spacing."""
+        r     = float(PIECES.CIRCLE_RADIUS_MM)
+        gap   = 5.0          # minimum edge-to-edge gap between any two pieces
+        min_d = 2.0 * r + gap
+
+        x_lo = float(SIMULATOR.X_MIN_MM) + r
+        x_hi = float(SIMULATOR.X_MAX_MM) - r
+        y_lo = float(SIMULATOR.Y_MIN_MM) + r
+        y_hi = float(SIMULATOR.Y_MAX_MM) - r
+
+        placed: List[Tuple[float, float]] = []
+        max_attempts = 10_000
+
+        for piece in self._board.active_pieces():
+            for _ in range(max_attempts):
+                cx = random.uniform(x_lo, x_hi)
+                cy = random.uniform(y_lo, y_hi)
+                if all(math.hypot(cx - px, cy - py) >= min_d for px, py in placed):
+                    placed.append((cx, cy))
+                    self._board.update_piece_position(piece.piece_id, cx, cy, piece.orientation_deg, 0.0)
+                    self._last_seen[piece.piece_id] = time.monotonic()
+                    break
+
+        self._board_widget.refresh()
+        self._debug_tab.on_sim_log('SIM: positions randomized')
 
     @pyqtSlot(bool)
     def _on_connection_changed(self, connected: bool) -> None:
@@ -605,6 +602,11 @@ class MainWindow(QMainWindow):
     @pyqtSlot()
     def _on_stale_check_timer(self) -> None:
         """Recompute the stale set and push it to the board widget."""
+        # In simulation mode all piece positions are synthetic, so nothing
+        # is ever truly "stale" — skip the greying-out logic entirely.
+        if self._sim_mode:
+            self._board_widget.set_stale_pieces(set(), self._hide_stale)
+            return
         now = time.monotonic()
         # A piece is stale if it has never been seen or hasn't been seen in >5 s
         stale: Set[int] = {
@@ -676,3 +678,121 @@ class MainWindow(QMainWindow):
             )
         except (ValueError, IndexError, UnicodeDecodeError):
             return None
+
+    # ------------------------------------------------------------------
+    # Wave dispatcher
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _group_by_sequence(commands: List[MoveCommand]) -> List[List[MoveCommand]]:
+        grouped: Dict[int, List[MoveCommand]] = {}
+        for cmd in sorted(commands, key=lambda c: (c.sequence_num, c.piece_id)):
+            grouped.setdefault(cmd.sequence_num, []).append(cmd)
+        return [grouped[seq] for seq in sorted(grouped.keys())]
+
+    def _reset_wave_dispatch(self) -> None:
+        self._wave_timer.stop()
+        self._pending_waves = []
+        self._active_wave_piece_ids.clear()
+        self._wave_running = False
+
+    def _dispatch_next_wave(self) -> None:
+        if not self._pending_waves:
+            self._wave_running = False
+            self._active_wave_piece_ids.clear()
+            return
+
+        wave = self._pending_waves.pop(0)
+        self._wave_running = True
+
+        if self._sim_mode:
+            self._dispatch_wave_sim(wave)
+        else:
+            self._dispatch_wave_serial(wave)
+
+    def _dispatch_wave_sim(self, wave: List[MoveCommand]) -> None:
+        self._simulator.speed_mm_s = self._debug_tab.simulator_speed_mm_s
+        self._active_wave_piece_ids = {cmd.piece_id for cmd in wave}
+        self._simulator.queue_moves(wave)
+
+        # Empty wave guard.
+        if not self._active_wave_piece_ids:
+            self._dispatch_next_wave()
+
+    def _dispatch_wave_serial(self, wave: List[MoveCommand]) -> None:
+        max_duration_ms = 0
+        for cmd in wave:
+            est_ms = self._send_serial_move(cmd)
+            if est_ms > max_duration_ms:
+                max_duration_ms = est_ms
+
+        # Gate the next wave with a conservative timing window.
+        slack_ms = int(PLANNING.CONFLICT_SERIAL_WAVE_SLACK_MS)
+        wait_ms = max(1, max_duration_ms + slack_ms)
+        self._wave_timer.start(wait_ms)
+
+    def _send_serial_move(self, cmd: MoveCommand) -> int:
+        piece = self._board.get_piece(cmd.piece_id)
+        if piece is None:
+            theta = cmd.target_theta if cmd.target_theta is not None else 0.0
+            self._handler.send(build_position_command(
+                cmd.piece_id,
+                cmd.target_x_mm,
+                cmd.target_y_mm,
+                theta,
+                cmd.duration_ms,
+            ))
+            return max(1, cmd.duration_ms)
+
+        dx = cmd.target_x_mm - piece.x_mm
+        dy = cmd.target_y_mm - piece.y_mm
+        dist = math.hypot(dx, dy)
+
+        if dist > 1.0:
+            fwd = math.degrees(math.atan2(dy, dx)) % 360.0
+            bwd = (fwd + 180.0) % 360.0
+            diff_fwd = abs((fwd - piece.orientation_deg + 180.0) % 360.0 - 180.0)
+            diff_bwd = abs((bwd - piece.orientation_deg + 180.0) % 360.0 - 180.0)
+            rotate_theta = fwd if diff_fwd <= diff_bwd else bwd
+        else:
+            rotate_theta = piece.orientation_deg
+
+        rot_angle_deg = abs((rotate_theta - piece.orientation_deg + 180.0) % 360.0 - 180.0)
+        rot_duration_ms = 0
+        if rot_angle_deg > 0.5:
+            rot_duration_ms = max(1, int(
+                math.radians(rot_angle_deg)
+                / SIMULATOR.ROTATION_ANGULAR_VEL_RAD_S * 1000
+            ))
+            self._handler.send(build_position_command(
+                cmd.piece_id,
+                piece.x_mm,
+                piece.y_mm,
+                rotate_theta,
+                rot_duration_ms,
+            ))
+
+        self._handler.send(build_position_command(
+            cmd.piece_id,
+            cmd.target_x_mm,
+            cmd.target_y_mm,
+            rotate_theta,
+            cmd.duration_ms,
+        ))
+        return rot_duration_ms + max(1, cmd.duration_ms)
+
+    @pyqtSlot(int)
+    def _on_sim_move_complete(self, piece_id: int) -> None:
+        if not self._wave_running or not self._sim_mode:
+            return
+        self._active_wave_piece_ids.discard(piece_id)
+        if not self._active_wave_piece_ids:
+            self._dispatch_next_wave()
+
+    @pyqtSlot()
+    def _on_wave_timer_timeout(self) -> None:
+        if self._sim_mode:
+            return
+        if not self._wave_running:
+            return
+        self._dispatch_next_wave()

@@ -221,6 +221,7 @@ class PLANNING:
     PLANNERS = {
         'Direct (straight-line)':  ('planning.direct_planner',  'DirectPlanner'),
         'Queued (sequential)':     ('planning.queued_planner',  'QueuedPlanner'),
+        'Enhanced Conflict (iterative)': ('planning.enhanced_conflict_planner', 'EnhancedConflictPlanner'),
     }
 
     DEFAULT_PLANNER        = 'Direct (straight-line)'
@@ -228,6 +229,20 @@ class PLANNING:
     # Move duration defaults
     DEFAULT_MOVE_DURATION_MS = 3000
     HOME_MOVE_DURATION_MS    = 5000
+
+    # EnhancedConflictPlanner tuning
+    CONFLICT_MIN_SEGMENT_MM       = 20.0
+    CONFLICT_ARRIVAL_EPS_MM       = 2.0
+    CONFLICT_DOCK_EPS_MM          = 8.0
+    CONFLICT_MAX_ITERATIONS       = 200
+    CONFLICT_DETOUR_DISTANCE_MM   = 100.0
+    CONFLICT_DETOUR_HOLD_ITERS    = 3
+    CONFLICT_MAX_DETOUR_CHAIN     = 10
+    CONFLICT_SERIAL_WAVE_SLACK_MS = 300
+    CONFLICT_DEBUG_LOGGING        = True
+    CONFLICT_ENABLE_UNSTICK       = True
+    CONFLICT_UNSTICK_GAP_MM       = 5.0
+    CONFLICT_UNSTICK_MAX_WAVES    = 10
 
 
 # ---------------------------------------------------------------------------
@@ -263,8 +278,9 @@ class SIMULATOR:
     # the robot begins translating (differential drive constraint).
     HEADING_TOLERANCE_DEG  = 3.0
 
-    # Extra clearance added to 2×radius for piece–piece collision detection
-    COLLISION_MARGIN_MM    = 2.0
+    # Extra clearance added to 2×radius for piece–piece collision detection.
+    # Set to 0 so pieces only block when they actually touch (edge-to-edge).
+    COLLISION_MARGIN_MM    = -3.0
 
     # Physical boundary of the whole table in playing-area mm coordinates.
     # Pieces must stay within these limits (centre must be ≥ radius from wall).
