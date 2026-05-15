@@ -63,6 +63,8 @@ class MotionSimulator(QObject):
         self._phase: Dict[int, str] = {}        # piece_id → 'rotate' | 'translate'
         self._rotate_to: Dict[int, float] = {} # piece_id → chosen heading (deg)
 
+        self._collision_enabled: bool = True
+
         self._timer = QTimer(self)
         self._timer.setInterval(SIMULATOR.UPDATE_INTERVAL_MS)
         self._timer.timeout.connect(self._tick)
@@ -111,6 +113,14 @@ class MotionSimulator(QObject):
     @property
     def is_running(self) -> bool:
         return self._timer.isActive()
+
+    @property
+    def collision_enabled(self) -> bool:
+        return self._collision_enabled
+
+    @collision_enabled.setter
+    def collision_enabled(self, value: bool) -> None:
+        self._collision_enabled = value
 
     # ------------------------------------------------------------------
     # Timer tick
@@ -196,13 +206,14 @@ class MotionSimulator(QObject):
 
             # ── 2. Piece–piece collision check (vs. static snapshot) ─────
             blocked = False
-            for other_pid, (ox, oy) in snapshot.items():
-                if math.hypot(new_x - ox, new_y - oy) < self._collision_dist:
-                    self.log_message.emit(
-                        f'SIM: 0x{pid:02X} blocked by 0x{other_pid:02X}'
-                    )
-                    blocked = True
-                    break
+            if self._collision_enabled:
+                for other_pid, (ox, oy) in snapshot.items():
+                    if math.hypot(new_x - ox, new_y - oy) < self._collision_dist:
+                        self.log_message.emit(
+                            f'SIM: 0x{pid:02X} blocked by 0x{other_pid:02X}'
+                        )
+                        blocked = True
+                        break
 
             if blocked:
                 # Hold position this tick but allow in-place rotation

@@ -1,5 +1,25 @@
-﻿"""
+"""
 planning/enhanced_conflict_planner.py  -  MiniBot Chess Swarm Coordinator
+
+EnhancedConflictPlanner: collision-safe parallel-wave iterative planner with
+active deadlock resolution.
+
+When both sea-parting and single-blocker detour fail on the same iteration,
+a "make way" cycle is triggered:
+
+  1. The stuck piece *furthest from its goal* is selected as the priority
+     piece for this cycle.
+  2. Every other piece whose current position falls within _CLEARANCE of
+     the priority piece's direct path is given a "park" position outside
+     that corridor.  Multiple blocking pieces are moved in parallel per
+     clearing round.  Cascades (blocker A can't park because blocker B is
+     in the way) are resolved iteratively across MAKE_WAY_PARK_ROUNDS rounds.
+  3. Once the corridor is clear, the priority piece is sent directly to its
+     goal in a single wave.
+  4. The main iterative planner resumes from the new positions.
+
+If a new deadlock occurs after a make-way cycle, steps 1-4 repeat until
+MAKE_WAY_MAX_CYCLES interventions have been exhausted.
 
 Clean-room redesign with collision safety as the foundational invariant.
 
@@ -45,6 +65,7 @@ Each outer iteration tries to build one "wave" (a set of parallel moves):
 
 from __future__ import annotations
 
+import itertools
 import logging
 import math
 from typing import Callable, Dict, List, Optional, Tuple
@@ -67,6 +88,21 @@ _DOCK:      float = float(getattr(PLANNING, 'CONFLICT_DOCK_EPS_MM',     8.0))
 _MAX_ITER:  int   = int(getattr(PLANNING,   'CONFLICT_MAX_ITERATIONS',  50))
 _MAX_STALL:      int = 8   # consecutive no-progress iterations before giving up
 _MAX_SEA_ROUNDS: int = 8   # maximum clearing waves planned per sea-parting attempt
+
+# Make-way deadlock resolution
+_MW_STALL_TRIGGER: int   = int(getattr(PLANNING, 'MAKE_WAY_DEADLOCK_TRIGGER', 4))
+_MW_MAX_CYCLES:    int   = int(getattr(PLANNING, 'MAKE_WAY_MAX_CYCLES',       5))
+_MW_PARK_ROUNDS:   int   = int(getattr(PLANNING, 'MAKE_WAY_PARK_ROUNDS',      8))
+# Maximum times the priority piece is allowed to yield per _make_way call.
+_MW_YIELD_MAX:     int   = int(getattr(PLANNING, 'MAKE_WAY_YIELD_MAX',        2))
+
+# Net-progress stall counter (proposal 2)
+_MW_NET_PROGRESS_MM: float = float(getattr(PLANNING, 'MAKE_WAY_NET_PROGRESS_MM', 5.0))
+_MW_NET_STALL_CAP:   int   = int(getattr(PLANNING,   'MAKE_WAY_NET_STALL_CAP',  14))
+
+# Cycle detector (proposal 3)
+_MW_CYCLE_GRID:    int = int(getattr(PLANNING, 'MAKE_WAY_CYCLE_GRID_MM',  5))
+_MW_CYCLE_HISTORY: int = int(getattr(PLANNING, 'MAKE_WAY_CYCLE_HISTORY', 10))
 
 log = logging.getLogger(__name__)
 
@@ -115,14 +151,53 @@ def _in_bounds(p: Vec2) -> bool:
 _Move = Tuple[int, Vec2, Vec2, str]
 
 
+# -- Target optimisation (brute-force optimal within each interchangeable group) --
+
+def _optimise_targets_optimal(
+    pos:   Dict[int, Vec2],
+    goals: Dict[int, Vec2],
+) -> Dict[int, Vec2]:
+    """Reassign goals among interchangeable pieces to minimise total travel.
+
+    Uses brute-force permutation search within each (colour, rank) group so
+    the result is globally optimal.  Max group = 8 pawns ? 8! = 40 320 iters.
+    """
+    if not goals:
+        return goals
+
+    groups: Dict[tuple, List[int]] = {}
+    for pid in goals:
+        rank = PIECES.PIECE_RANKS.get(pid, '')
+        if rank in ('pawn', 'bishop', 'rook', 'knight'):
+            colour = 'white' if pid in PIECES.WHITE_IDS else 'black'
+            groups.setdefault((colour, rank), []).append(pid)
+
+    new_goals = dict(goals)
+    for _key, pids in groups.items():
+        if len(pids) < 2:
+            continue
+        slots = [goals[pid] for pid in pids]
+        best_total = sum(_dist(pos[pids[i]], slots[i]) for i in range(len(pids)))
+        best_perm: Optional[tuple] = None
+        for perm in itertools.permutations(slots):
+            total = sum(_dist(pos[pids[i]], perm[i]) for i in range(len(pids)))
+            if total < best_total - 1.0:
+                best_total = total
+                best_perm = perm
+        if best_perm is not None:
+            for i, pid in enumerate(pids):
+                new_goals[pid] = best_perm[i]
+    return new_goals
+
+
 # -- Planner -------------------------------------------------------------------
 
 class EnhancedConflictPlanner(BasePlanner):
-    """Collision-safe, parallel-wave, iterative planner."""
+    """Collision-safe parallel-wave planner with make-way deadlock resolution."""
 
     @property
     def name(self) -> str:
-        return 'Enhanced Conflict (iterative)'
+        return 'Enhanced Conflict'
 
     # -- Public entry point ----------------------------------------------------
 
@@ -152,8 +227,22 @@ class EnhancedConflictPlanner(BasePlanner):
         goals = self._optimise_target_assignment(pos, goals)
 
         commands: List[MoveCommand] = []
-        seq    = 0
-        stalls = 0
+        seq             = 0
+        stalls          = 0
+        make_way_cycles = 0
+
+        # -- Anti-oscillation state -------------------------------------------
+        # Proposal 2: net-progress stall counter.
+        # Tracks the minimum remaining distance across all goals.  Resets when
+        # any piece makes meaningful forward progress (>= _MW_NET_PROGRESS_MM).
+        best_min_rem:  float = float('inf')
+        net_stalls:    int   = 0
+
+        # Proposal 3: position fingerprint cycle detector.
+        # Each iteration we hash all piece positions rounded to _MW_CYCLE_GRID.
+        # If the fingerprint appeared in the recent history window, a cycle is
+        # confirmed and we escalate immediately to make-way (or exit).
+        fp_history: List[frozenset] = []
 
         # Auxiliary data for chain-merge (priority 4):
         #   wstarts[(seq, pid)]  = position of pid just before wave seq began
@@ -168,6 +257,58 @@ class EnhancedConflictPlanner(BasePlanner):
             ]
             if not remaining:
                 log.info('[ECP] all targets reached in %d waves', seq)
+                break
+
+            # -- Proposal 3: cycle detection ----------------------------------
+            fingerprint = frozenset(
+                (pid,
+                 int(round(pos[pid][0] / _MW_CYCLE_GRID)),
+                 int(round(pos[pid][1] / _MW_CYCLE_GRID)))
+                for pid in remaining
+            )
+            if fingerprint in fp_history:
+                log.warning('[ECP] iter=%d: position cycle detected � escalating', _iter)
+                # Jump directly to make-way, bypassing sea-part / detour
+                if make_way_cycles < _MW_MAX_CYCLES:
+                    mw_waves = self._make_way(remaining, pos, goals, validator)
+                    if mw_waves:
+                        for mw_wave in mw_waves:
+                            snap = dict(pos)
+                            for pid_mv, start, end, note in mw_wave:
+                                commands.append(MoveCommand(
+                                    piece_id     = pid_mv,
+                                    target_x_mm  = end[0],
+                                    target_y_mm  = end[1],
+                                    duration_ms  = self.duration_for_distance(_dist(start, end)),
+                                    sequence_num = seq,
+                                    planner_debug= note + ' [cycle]',
+                                ))
+                                wstarts[(seq, pid_mv)] = start
+                                pos[pid_mv] = end
+                            wpos_snap[seq] = snap
+                            seq += 1
+                        make_way_cycles += 1
+                        stalls = net_stalls = 0
+                        fp_history.clear()   # reset history after intervention
+                        log.info('[ECP] iter=%d: cycle-triggered make-way %d (%d waves)',
+                                 _iter, make_way_cycles, len(mw_waves))
+                        continue
+                log.warning('[ECP] iter=%d: cycle confirmed, make-way exhausted � giving up', _iter)
+                break
+            fp_history.append(fingerprint)
+            if len(fp_history) > _MW_CYCLE_HISTORY:
+                fp_history.pop(0)
+
+            # -- Proposal 2: net-progress stall check -------------------------
+            cur_min_rem = min(_dist(pos[pid], goals[pid]) for pid in remaining)
+            if cur_min_rem < best_min_rem - _MW_NET_PROGRESS_MM:
+                best_min_rem = cur_min_rem
+                net_stalls   = 0
+            else:
+                net_stalls += 1
+            if net_stalls > _MW_NET_STALL_CAP:
+                log.warning('[ECP] iter=%d: no net progress for %d iters � giving up',
+                            _iter, net_stalls)
                 break
 
             # -- Try to build a parallel wave ----------------------------------
@@ -190,6 +331,7 @@ class EnhancedConflictPlanner(BasePlanner):
                 wpos_snap[seq] = snap
                 seq    += 1
                 stalls  = 0
+                net_stalls = 0
                 log.debug('[ECP] iter=%d wave=%d size=%d', _iter, seq - 1, len(wave))
                 continue
 
@@ -221,13 +363,39 @@ class EnhancedConflictPlanner(BasePlanner):
                     wpos_snap[seq] = snap
                     seq += 1
                 stalls = 0
+                net_stalls = 0
                 log.debug('[ECP] iter=%d: sea-part %d waves emitted', _iter, len(sea_waves))
                 continue
 
             # Fall back to single-blocker detour
             det = self._find_detour(remaining, pos, goals, validator)
             if det is None:
-                log.warning('[ECP] iter=%d: no detour found', _iter)
+                # Sea-parting and detour both failed � try make-way
+                if make_way_cycles < _MW_MAX_CYCLES:
+                    mw_waves = self._make_way(remaining, pos, goals, validator)
+                    if mw_waves:
+                        for mw_wave in mw_waves:
+                            snap = dict(pos)
+                            for pid_mv, start, end, note in mw_wave:
+                                commands.append(MoveCommand(
+                                    piece_id     = pid_mv,
+                                    target_x_mm  = end[0],
+                                    target_y_mm  = end[1],
+                                    duration_ms  = self.duration_for_distance(_dist(start, end)),
+                                    sequence_num = seq,
+                                    planner_debug= note,
+                                ))
+                                wstarts[(seq, pid_mv)] = start
+                                pos[pid_mv] = end
+                            wpos_snap[seq] = snap
+                            seq += 1
+                        make_way_cycles += 1
+                        stalls = net_stalls = 0
+                        fp_history.clear()   # positions changed � old fingerprints stale
+                        log.info('[ECP] iter=%d: make-way cycle %d complete (%d waves)',
+                                 _iter, make_way_cycles, len(mw_waves))
+                        continue
+                log.warning('[ECP] iter=%d: no resolution found', _iter)
                 break
 
             pid, start, end, note = det
@@ -290,7 +458,7 @@ class EnhancedConflictPlanner(BasePlanner):
           - Both bishops of the same colour
           - Both rooks of the same colour
           - Both knights of the same colour
-          (Kings and queens are unique per colour — never swapped.)
+          (Kings and queens are unique per colour � never swapped.)
         """
         if not goals:
             return goals
@@ -314,7 +482,7 @@ class EnhancedConflictPlanner(BasePlanner):
 
             # Greedy nearest-neighbour assignment:
             #   For each piece (in arbitrary order), pick the closest remaining
-            #   target slot.  This is O(n²) but n ≤ 8 for pawns.
+            #   target slot.  This is O(n�) but n = 8 for pawns.
             assigned_targets: List[Vec2] = []
             available = list(target_slots)
             for pid in pids:
@@ -418,7 +586,7 @@ class EnhancedConflictPlanner(BasePlanner):
         # 2. Bypass around nearest path blocker
         blocker = self._nearest_blocker(start, goal, static)
         if blocker is None:
-            # Direct scales failed but no clear static blocker found —
+            # Direct scales failed but no clear static blocker found �
             # wave segment conflicts are responsible; skip this piece.
             return None
 
@@ -635,7 +803,7 @@ class EnhancedConflictPlanner(BasePlanner):
         up to _MAX_SEA_ROUNDS clearing waves in advance:
 
           Round 1  Outermost blockers (farthest from stuck piece, most free
-                   space) are moved first.  Partial progress is fine — pieces
+                   space) are moved first.  Partial progress is fine � pieces
                    that can't escape yet are skipped without aborting the wave.
           Round 2  With round-1 pieces out of the way, middle blockers now
                    have room and can be moved.
@@ -647,7 +815,7 @@ class EnhancedConflictPlanner(BasePlanner):
         pieces to their goals (re-blocking the corridor) between clearing waves.
 
         Trigger condition: at least one corridor blocker is settled (within
-        2 × _DOCK of its own goal).  Purely un-settled blockers are handled
+        2 � _DOCK of its own goal).  Purely un-settled blockers are handled
         better by the normal _build_wave / _find_detour flow.
         """
         for pid in sorted(remaining, key=lambda p: -_dist(pos[p], goals[p])):
@@ -682,7 +850,7 @@ class EnhancedConflictPlanner(BasePlanner):
 
             # ---- Plan the clearing cascade using simulated positions --------
             # sim_pos tracks where each piece *will* be after planned waves.
-            # The stuck piece (pid) is excluded from static checks — we are
+            # The stuck piece (pid) is excluded from static checks � we are
             # clearing a lane FOR it, so its current position must not block
             # the escape candidates we're evaluating.
             waves:   List[List[_Move]] = []
@@ -691,7 +859,7 @@ class EnhancedConflictPlanner(BasePlanner):
             for _round in range(_MAX_SEA_ROUNDS):
                 cb = _corridor_blockers(sim_pos)
                 if not cb:
-                    break   # corridor fully clear — done
+                    break   # corridor fully clear � done
 
                 wave:    List[_Move]     = []
                 wave_ep: Dict[int, Vec2] = {}
@@ -730,11 +898,11 @@ class EnhancedConflictPlanner(BasePlanner):
                                 moved = True
                                 moved_any = True
                                 break
-                    # Piece that can't move yet is simply skipped —
+                    # Piece that can't move yet is simply skipped �
                     # a later round will handle it once neighbours have moved.
 
                 if not moved_any:
-                    break   # no progress possible — stop planning
+                    break   # no progress possible � stop planning
 
                 waves.append(wave)
                 for oid, _, cand, _ in wave:
@@ -749,6 +917,247 @@ class EnhancedConflictPlanner(BasePlanner):
                 return waves
 
         return None
+
+    # -- Make-way deadlock resolution -----------------------------------------
+
+    def _make_way(
+        self,
+        remaining: List[int],
+        pos:       Dict[int, Vec2],
+        goals:     Dict[int, Vec2],
+        validator: Optional[Callable],
+    ) -> Optional[List[List[_Move]]]:
+        """Give one stuck piece sole priority to reach its goal.
+
+        Selects the piece in ``remaining`` that is furthest from its goal as
+        the priority piece.  All pieces blocking its direct path are parked in
+        safe positions outside that corridor.  Cascade-blocked pieces are
+        handled in successive rounds (up to _MW_PARK_ROUNDS).  Once the
+        corridor is clear the priority piece is sent directly to its goal.
+
+        Returns a list of clearing waves (each a List[_Move]) followed by the
+        priority move wave, or None if clearing is not possible.
+        """
+        # Pick the stuck piece furthest from its goal as priority
+        priority_pid = max(remaining, key=lambda p: _dist(pos[p], goals[p]))
+        p_start      = pos[priority_pid]
+        p_goal       = goals[priority_pid]
+
+        log.debug('[ECP] _make_way: priority=0x%02X path=(%.0f,%.0f)->(%.0f,%.0f)',
+                  priority_pid, p_start[0], p_start[1], p_goal[0], p_goal[1])
+
+        sim_pos:    Dict[int, Vec2]   = dict(pos)
+        all_waves:  List[List[_Move]] = []
+        yield_used: int               = 0
+
+        for _round in range(_MW_PARK_ROUNDS):
+            blockers = [
+                oid for oid in sim_pos
+                if oid != priority_pid
+                and _pt_seg_dist(sim_pos[oid], p_start, p_goal) < _CLEARANCE
+            ]
+            if not blockers:
+                break  # corridor is clear
+
+            wave:    List[_Move]     = []
+            wave_ep: Dict[int, Vec2] = {}
+            moved_any = False
+
+            # Sort: nearest blocker first (clear the entry to the path first)
+            for bid in sorted(blockers, key=lambda b: _dist(sim_pos[b], p_start)):
+                # Static = all pieces except this blocker.
+                # NOTE: priority piece IS included so its position blocks escape
+                # paths that would physically collide with it.
+                # Pieces already committed to this wave contribute their endpoints.
+                static: Dict[int, Vec2] = {
+                    xid: (wave_ep[xid] if xid in wave_ep else sim_pos[xid])
+                    for xid in sim_pos
+                    if xid != bid
+                }
+                park = self._park_escape(
+                    bid, sim_pos[bid], p_start, p_goal,
+                    static, validator, wave, goals,
+                )
+                if park is not None:
+                    wave.append((bid, sim_pos[bid], park, f'mw_park r={_round}'))
+                    wave_ep[bid] = park
+                    moved_any = True
+                # Piece that cannot park yet is skipped; a later round handles it
+                # once its neighbours have moved out of the way.
+
+            if not moved_any:
+                # The priority piece itself may be blocking blockers' escape routes.
+                # Allow it to yield � move further from its goal to create space.
+                if yield_used >= _MW_YIELD_MAX:
+                    log.warning('[ECP] _make_way: no blocker could park at round %d '
+                                '(yield budget exhausted)', _round)
+                    return None
+                yield_pos = self._yield_priority_piece(
+                    priority_pid, p_start, p_goal, blockers, sim_pos, goals, validator,
+                )
+                if yield_pos is None:
+                    log.warning('[ECP] _make_way: no blocker could park at round %d '
+                                'and priority piece cannot yield', _round)
+                    return None
+                yield_wave = [(priority_pid, sim_pos[priority_pid], yield_pos,
+                               f'mw_yield r={_round}')]
+                all_waves.append(yield_wave)
+                sim_pos[priority_pid] = yield_pos
+                p_start = yield_pos   # corridor now starts from new position
+                yield_used += 1
+                log.debug('[ECP] _make_way: priority 0x%02X yielded to (%.0f,%.0f) '
+                          '(yield %d/%d)',
+                          priority_pid, yield_pos[0], yield_pos[1],
+                          yield_used, _MW_YIELD_MAX)
+                continue  # retry blocker clearing with priority at new position
+
+            all_waves.append(wave)
+            for bid, _, park, _ in wave:
+                sim_pos[bid] = park
+
+        # Verify the corridor is now fully clear
+        still_blocking = [
+            oid for oid in sim_pos
+            if oid != priority_pid
+            and _pt_seg_dist(sim_pos[oid], p_start, p_goal) < _CLEARANCE
+        ]
+        if still_blocking:
+            log.warning('[ECP] _make_way: %d blocker(s) remain after %d rounds',
+                        len(still_blocking), _MW_PARK_ROUNDS)
+            return None
+
+        # Append the priority piece's direct move to its goal
+        static_final: Dict[int, Vec2] = {
+            xid: sim_pos[xid] for xid in sim_pos if xid != priority_pid
+        }
+        if self._safe(p_start, p_goal, static_final, []):
+            all_waves.append([(priority_pid, p_start, p_goal, 'mw_move')])
+        else:
+            # Path is geometrically clear but endpoint conflicts remain;
+            # still return the clearing waves � the main loop will handle the rest
+            log.debug('[ECP] _make_way: corridor clear but endpoint blocked; '
+                      'returning clearing waves only')
+
+        return all_waves or None
+
+    def _yield_priority_piece(
+        self,
+        priority_pid: int,
+        p_start:      Vec2,
+        p_goal:       Vec2,
+        blockers:     List[int],
+        sim_pos:      Dict[int, Vec2],
+        goals:        Dict[int, Vec2],
+        validator:    Optional[Callable],
+    ) -> Optional[Vec2]:
+        """Find a position for the priority piece that unblocks corridor blockers.
+
+        The priority piece is willing to move *further* from its goal in order
+        to create space for blockers to escape.  We search 8 compass directions
+        � 4 distances and, for each candidate, run a quick lookahead: simulate
+        the priority piece at that position and count how many blockers can now
+        find a valid park spot.
+
+        Scoring (highest wins):
+          primary   � number of blockers now able to park
+          secondary � proximity to own goal (minimise regression)
+
+        Returns the best candidate, or None if none unblocks at least one blocker.
+        """
+        static_for_yield: Dict[int, Vec2] = {
+            xid: sim_pos[xid] for xid in sim_pos if xid != priority_pid
+        }
+
+        best_cand:  Optional[Vec2]      = None
+        best_score: Tuple[int, float]   = (0, float('inf'))  # (unblocked, dist_to_goal)
+
+        for deg in range(0, 360, 45):
+            rad = math.radians(deg)
+            cx, cy = math.cos(rad), math.sin(rad)
+            for f in (1.5, 2.5, 3.5, 4.5):
+                cand = (
+                    p_start[0] + cx * _CLEARANCE * f,
+                    p_start[1] + cy * _CLEARANCE * f,
+                )
+                if not _in_bounds(cand):
+                    continue
+                if validator and not validator(priority_pid, cand[0], cand[1]):
+                    continue
+                if not self._safe(p_start, cand, static_for_yield, []):
+                    continue
+
+                # Lookahead: how many blockers can park if priority is at cand?
+                sim_yield = dict(sim_pos)
+                sim_yield[priority_pid] = cand
+                unblocked = 0
+                for bid in blockers:
+                    static_b: Dict[int, Vec2] = {
+                        xid: sim_yield[xid]
+                        for xid in sim_yield
+                        if xid != bid
+                    }
+                    # Corridor is now cand ? p_goal
+                    if self._park_escape(
+                        bid, sim_pos[bid], cand, p_goal,
+                        static_b, validator, [], goals,
+                    ) is not None:
+                        unblocked += 1
+
+                dist_to_goal = _dist(cand, p_goal)
+                score: Tuple[int, float] = (unblocked, -dist_to_goal)
+                if score > best_score:
+                    best_score = score
+                    best_cand  = cand
+
+        if best_score[0] == 0:
+            return None   # no candidate unblocked even one blocker � pointless to yield
+        return best_cand
+
+    def _park_escape(
+        self,
+        pid:        int,
+        start:      Vec2,
+        path_start: Vec2,
+        path_goal:  Vec2,
+        static:     Dict[int, Vec2],
+        validator:  Optional[Callable],
+        wave:       List[_Move],
+        goals:      Optional[Dict[int, Vec2]] = None,
+    ) -> Optional[Vec2]:
+        """Find a safe parking position outside the priority path.
+
+        Searches 8 compass directions � 5 distances.  The candidate must lie
+        outside the priority corridor (centre-to-corridor >= _CLEARANCE) and
+        pass the standard _safe() check.  Among valid candidates the one
+        closest to the piece's own goal is preferred (prevents oscillation).
+        """
+        own_goal:   Optional[Vec2] = goals.get(pid) if goals else None
+        best_cand:  Optional[Vec2] = None
+        best_score: float          = float('inf')  # minimise dist to own goal
+
+        for deg in range(0, 360, 45):
+            rad = math.radians(deg)
+            cx, cy = math.cos(rad), math.sin(rad)
+            for f in (1.5, 2.5, 3.5, 4.5, 5.5):
+                cand = (
+                    start[0] + cx * _CLEARANCE * f,
+                    start[1] + cy * _CLEARANCE * f,
+                )
+                if not _in_bounds(cand):
+                    continue
+                if validator and not validator(pid, cand[0], cand[1]):
+                    continue
+                # Must lie *outside* the priority corridor
+                if _pt_seg_dist(cand, path_start, path_goal) < _CLEARANCE:
+                    continue
+                if not self._safe(start, cand, static, wave):
+                    continue
+                score = _dist(cand, own_goal) if own_goal else 0.0
+                if score < best_score:
+                    best_score = score
+                    best_cand  = cand
+
+        return best_cand
 
     # -- Chain merge (priority 4) ----------------------------------------------
 

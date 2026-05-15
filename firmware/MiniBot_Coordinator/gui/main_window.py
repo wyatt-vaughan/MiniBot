@@ -432,11 +432,16 @@ class MainWindow(QMainWindow):
         # Path planning → send (serial or sim depending on mode)
         self._path_tab.send_commands.connect(self._on_send_move_commands)
 
+        # Path planning → board visualization
+        self._path_tab.plan_visualized.connect(self._on_plan_visualized)
+
         # Debug tab → send (serial or sim) + simulator toggle
         self._debug_tab.send_raw.connect(self._on_debug_send_raw)
         self._debug_tab.simulator_mode_changed.connect(self._on_sim_mode_changed)
         self._debug_tab.hide_stale_pieces_changed.connect(self._on_hide_stale_changed)
         self._debug_tab.randomize_positions.connect(self._on_randomize_positions)
+        self._debug_tab.sim_collision_changed.connect(self._on_sim_collision_changed)
+        self._debug_tab.clear_pending_moves.connect(self._simulator.stop_all)
 
         # System control → send (always serial; system commands never simulated)
         self._sys_tab.send_raw.connect(self._handler.send)
@@ -482,11 +487,11 @@ class MainWindow(QMainWindow):
         Uses the DirectPlanner to build a single MoveCommand and sends it
         straight to _on_send_move_commands without touching the queue.
         """
-        from planning.direct_planner import DirectPlanner
+        from planning.enhanced_conflict_planner import EnhancedConflictPlanner
         piece = self._board.get_piece(piece_id)
         if piece is None:
             return
-        planner   = DirectPlanner()
+        planner   = EnhancedConflictPlanner()
         positions = {piece_id: (piece.x_mm, piece.y_mm)}
         targets   = {piece_id: (x_mm, y_mm)}
         commands  = planner.plan_moves(positions, targets)
@@ -517,6 +522,15 @@ class MainWindow(QMainWindow):
                 self._simulator.queue_moves([cmd])
         else:
             self._handler.send(data)
+
+    @pyqtSlot(list, dict)
+    def _on_plan_visualized(self, commands: list, positions: dict) -> None:
+        """Forward planned move commands to the board for arrow visualization."""
+        self._board_widget.set_plan_visualization(commands or None, positions)
+
+    @pyqtSlot(bool)
+    def _on_sim_collision_changed(self, enabled: bool) -> None:
+        self._simulator.collision_enabled = enabled
 
     @pyqtSlot(bool)
     def _on_sim_mode_changed(self, enabled: bool) -> None:

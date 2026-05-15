@@ -36,6 +36,8 @@ class DebugTab(QWidget):
     simulator_mode_changed    = pyqtSignal(bool)   # True = simulator active
     hide_stale_pieces_changed = pyqtSignal(bool)   # True = hide pieces unseen >5s
     randomize_positions       = pyqtSignal()        # scatter all pieces randomly
+    sim_collision_changed     = pyqtSignal(bool)   # True = collision detection on
+    clear_pending_moves       = pyqtSignal()        # cancel all in-flight sim moves
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -139,6 +141,25 @@ class DebugTab(QWidget):
         self._btn_randomize.clicked.connect(self.randomize_positions)
         sl.addWidget(self._btn_randomize)
 
+        self._collision_check = QCheckBox('Enable collision detection')
+        self._collision_check.setChecked(True)
+        self._collision_check.setEnabled(False)
+        self._collision_check.setToolTip(
+            'When unchecked, pieces pass through each other in the simulator.\n'
+            'Useful for testing planners without false collision blocks.'
+        )
+        self._collision_check.toggled.connect(self.sim_collision_changed)
+        sl.addWidget(self._collision_check)
+
+        self._btn_clear_moves = QPushButton('Clear Pending Moves')
+        self._btn_clear_moves.setToolTip(
+            'Cancel all in-flight simulator moves immediately.\n'
+            'Pieces stay at their current positions.'
+        )
+        self._btn_clear_moves.setEnabled(False)
+        self._btn_clear_moves.clicked.connect(self.clear_pending_moves)
+        sl.addWidget(self._btn_clear_moves)
+
         root.addWidget(sim_group)
 
         # --- Display options ---
@@ -209,6 +230,8 @@ class DebugTab(QWidget):
         mode_str = 'ON' if enabled else 'OFF'
         self._log.append(f'[SIM] Simulator mode {mode_str}')
         self._btn_randomize.setEnabled(enabled)
+        self._collision_check.setEnabled(enabled)
+        self._btn_clear_moves.setEnabled(enabled)
         self.simulator_mode_changed.emit(enabled)
 
     # ------------------------------------------------------------------

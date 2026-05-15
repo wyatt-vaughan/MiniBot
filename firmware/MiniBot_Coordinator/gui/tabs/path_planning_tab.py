@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt
 from PyQt6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
 )
@@ -32,15 +32,20 @@ class PathPlanningTab(QWidget):
 
     Signals:
         send_commands(list[MoveCommand])   — emitted when "Send Commands" is clicked
+        plan_visualized(list, dict)        — emitted after planning to update board arrows
     """
 
-    send_commands = pyqtSignal(list)  # list[MoveCommand]
+    send_commands   = pyqtSignal(list)  # list[MoveCommand]
+    plan_visualized = pyqtSignal(list, dict)  # commands, initial_positions
 
     def __init__(self, board_state: BoardState, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._board         = board_state
         self._move_queue:   List[MoveCommand] = []
         self._selected_id:  Optional[int]     = None  # from chessboard click
+        self._viz_enabled:  bool              = True
+        # Snapshot of positions at the time the last plan was generated
+        self._viz_positions: Dict[int, Tuple[float, float]] = {}
 
         self._build_ui()
 
@@ -115,6 +120,16 @@ class PathPlanningTab(QWidget):
         self._btn_clear_queue = QPushButton('Clear Queue')
         self._btn_clear_queue.clicked.connect(self._on_clear_queue)
         clr_row.addWidget(self._btn_clear_queue)
+
+        self._btn_clear_paths = QPushButton('Clear Paths')
+        self._btn_clear_paths.clicked.connect(self._on_clear_paths)
+        clr_row.addWidget(self._btn_clear_paths)
+
+        self._chk_show_paths = QCheckBox('Show Paths')
+        self._chk_show_paths.setChecked(True)
+        self._chk_show_paths.toggled.connect(self._on_show_paths_toggled)
+        clr_row.addWidget(self._chk_show_paths)
+
         clr_row.addStretch()
         ql.addLayout(clr_row)
 
@@ -176,7 +191,7 @@ class PathPlanningTab(QWidget):
             return self._board.validate_move(pid, tx, ty)
 
         commands = planner.plan_moves(positions, targets, validator=_validator)
-        self._enqueue(commands)
+        self._enqueue(commands, snap_positions=dict(positions))
 
     # ------------------------------------------------------------------
     # Button handlers
@@ -202,8 +217,9 @@ class PathPlanningTab(QWidget):
         def _validator(pid: int, tx: float, ty: float) -> bool:
             return validator(pid, tx, ty)
 
+        self._viz_positions = {}  # fresh snapshot for new plan
         commands = planner.plan_moves(positions, targets, validator=_validator)
-        self._enqueue(commands)
+        self._enqueue(commands, snap_positions=dict(positions))
 
     def _on_return_home(self) -> None:
         from config import PIECES as P, PLANNING as PL
@@ -221,11 +237,23 @@ class PathPlanningTab(QWidget):
         commands = planner.plan_moves(positions, targets)
         for cmd in commands:
             cmd.duration_ms = PL.HOME_MOVE_DURATION_MS
-        self._enqueue(commands)
+        self._viz_positions = {}  # fresh snapshot for new plan
+        self._enqueue(commands, snap_positions=dict(positions))
 
     def _on_clear_queue(self) -> None:
         self._move_queue.clear()
         self._queue_list.clear()
+        self.plan_visualized.emit([], {})
+
+    def _on_clear_paths(self) -> None:
+        self.plan_visualized.emit([], {})
+
+    def _on_show_paths_toggled(self, checked: bool) -> None:
+        self._viz_enabled = checked
+        if not checked:
+            self.plan_visualized.emit([], {})
+        elif self._move_queue:
+            self.plan_visualized.emit(list(self._move_queue), dict(self._viz_positions))
 
     def _on_send(self) -> None:
         if self._move_queue:
@@ -243,10 +271,16 @@ class PathPlanningTab(QWidget):
             from planning.direct_planner import DirectPlanner
             return DirectPlanner()
 
-    def _enqueue(self, commands: List[MoveCommand]) -> None:
+    def _enqueue(self, commands: List[MoveCommand], snap_positions: Optional[Dict[int, Tuple[float, float]]] = None) -> None:
+        if snap_positions and not self._viz_positions:
+            self._viz_positions = dict(snap_positions)
+        elif snap_positions:
+            # Merge: only add positions for pieces not already in the snapshot
+            for pid, pos in snap_positions.items():
+                if pid not in self._viz_positions:
+                    self._viz_positions[pid] = pos
         self._move_queue.extend(commands)
         for cmd in commands:
-            piece = self._board.get_piece(cmd.piece_id)
             label = (
                 f"[seq {cmd.sequence_num:02d}] "
                 f"0x{cmd.piece_id:02X}"
@@ -256,6 +290,8 @@ class PathPlanningTab(QWidget):
             if cmd.planner_debug:
                 label += f"  | {cmd.planner_debug}"
             self._queue_list.addItem(QListWidgetItem(label))
+        if self._viz_enabled and commands:
+            self.plan_visualized.emit(list(self._move_queue), dict(self._viz_positions))
 
     def _rebuild_piece_combo(self) -> None:
         self._piece_combo.clear()

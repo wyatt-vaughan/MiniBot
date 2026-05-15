@@ -219,18 +219,20 @@ class GUI:
 class PLANNING:
     # Each entry: display name → dotted module path: class name
     PLANNERS = {
-        'Direct (straight-line)':  ('planning.direct_planner',  'DirectPlanner'),
-        'Queued (sequential)':     ('planning.queued_planner',  'QueuedPlanner'),
-        'Enhanced Conflict (iterative)': ('planning.enhanced_conflict_planner', 'EnhancedConflictPlanner'),
+        'Enhanced Conflict':  ('planning.enhanced_conflict_planner', 'EnhancedConflictPlanner'),
+        'Direct (debug only)':('planning.direct_planner',            'DirectPlanner'),
     }
 
-    DEFAULT_PLANNER        = 'Direct (straight-line)'
+    DEFAULT_PLANNER        = 'Enhanced Conflict'
 
     # Move duration defaults
     DEFAULT_MOVE_DURATION_MS = 3000
     HOME_MOVE_DURATION_MS    = 5000
 
-    # EnhancedConflictPlanner tuning
+    # SwarmPlanner tuning (retired — kept for reference)
+    # SWARM_GRID_MM, SWARM_MAX_ITER, SWARM_MAX_STALLS removed
+
+    # EnhancedConflictPlanner / ConflictPlanner tuning
     CONFLICT_MIN_SEGMENT_MM       = 20.0
     CONFLICT_ARRIVAL_EPS_MM       = 2.0
     CONFLICT_DOCK_EPS_MM          = 8.0
@@ -243,6 +245,36 @@ class PLANNING:
     CONFLICT_ENABLE_UNSTICK       = True
     CONFLICT_UNSTICK_GAP_MM       = 5.0
     CONFLICT_UNSTICK_MAX_WAVES    = 10
+
+    # EnhancedConflictPlanner tuning
+    # Stall count at which make-way is attempted (before the hard _MAX_STALL cap).
+    MAKE_WAY_DEADLOCK_TRIGGER  = 4
+    # Maximum make-way interventions allowed per plan() call.
+    MAKE_WAY_MAX_CYCLES        = 5
+    # Maximum clearing rounds per make-way cycle (handles cascaded blockers).
+    MAKE_WAY_PARK_ROUNDS       = 8
+    # Maximum times the priority piece may yield (step aside) per make-way call.
+    MAKE_WAY_YIELD_MAX         = 2
+    # Net-progress stall: if the closest remaining piece doesn't close by this
+    # many mm over NET_STALL_CAP consecutive iterations, force an exit.
+    MAKE_WAY_NET_PROGRESS_MM   = 5.0
+    MAKE_WAY_NET_STALL_CAP     = 14
+    # Cycle detector: fingerprint grid resolution (mm) and history depth.
+    MAKE_WAY_CYCLE_GRID_MM     = 5
+    MAKE_WAY_CYCLE_HISTORY     = 10
+
+    # StagingPlanner — pawn staging squares (centre positions in mm)
+    # White left cluster: a2, a3, b2, b3
+    STAGING_WHITE_LEFT  = [(25, 75), (25, 125), (75, 75), (75, 125)]
+    # White right cluster: g2, g3, h2, h3
+    STAGING_WHITE_RIGHT = [(325, 75), (325, 125), (375, 75), (375, 125)]
+    # Black left cluster: a6, a7, b6, b7  (mirrors white left)
+    STAGING_BLACK_LEFT  = [(25, 275), (25, 325), (75, 275), (75, 325)]
+    # Black right cluster: g6, g7, h6, h7  (mirrors white right)
+    STAGING_BLACK_RIGHT = [(325, 275), (325, 325), (375, 275), (375, 325)]
+    # Y coordinate of the outer staging tier that requires a phase-2 move
+    STAGING_OUTER_Y_WHITE = 125   # rank 3  (white outer tier → move down to rank 2)
+    STAGING_OUTER_Y_BLACK = 275   # rank 6  (black outer tier → move up to rank 7)
 
 
 # ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ Signals:
 from __future__ import annotations
 
 import math
-from typing import Dict, FrozenSet, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from PyQt6.QtCore import Qt, QPoint, QPointF, QRect, QRectF, pyqtSignal
 from PyQt6.QtGui import (
@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import QWidget
 
 from config import BOARD, GUI, PIECES
 from models.piece import BoardState, Piece
+from planning.base_planner import MoveCommand
 
 
 class ChessBoardWidget(QWidget):
@@ -63,6 +64,8 @@ class ChessBoardWidget(QWidget):
         self._target: Optional[Tuple[float, float]] = None  # mm in playing area
         self._hide_stale:  bool = False
         self._stale_ids:   Set[int] = set()
+        # Plan visualization: list of (x0, y0, x1, y1, wave_idx, total_waves)
+        self._plan_arrows: List[Tuple[float, float, float, float, int, int]] = []
 
         self.setMinimumSize(
             int(BOARD.CANVAS_WIDTH_MM  * GUI.SCALE_FACTOR),
@@ -85,6 +88,49 @@ class ChessBoardWidget(QWidget):
         """Update the set of piece IDs considered stale and whether to hide them."""
         self._stale_ids  = stale_ids
         self._hide_stale = hide
+        self.update()
+
+    def set_plan_visualization(
+        self,
+        commands:          Optional[List[MoveCommand]],
+        initial_positions: Dict[int, Tuple[float, float]],
+    ) -> None:
+        """Compute and store colored arrow draw records for planned moves.
+
+        Call with commands=None or empty list to clear the visualization.
+        Arrow color encodes wave index: green (wave 0) → orange → red (last wave).
+        """
+        self._plan_arrows = []
+        if not commands:
+            self.update()
+            return
+
+        # Group by sequence_num
+        waves: Dict[int, List[MoveCommand]] = {}
+        for cmd in commands:
+            waves.setdefault(cmd.sequence_num, []).append(cmd)
+
+        if not waves:
+            self.update()
+            return
+
+        total_waves = max(waves.keys()) + 1
+        # Simulate piece positions wave by wave so arrows start from correct positions
+        cur_pos: Dict[int, Tuple[float, float]] = dict(initial_positions)
+
+        for wave_idx in sorted(waves.keys()):
+            wave_cmds = waves[wave_idx]
+            for cmd in wave_cmds:
+                pid = cmd.piece_id
+                if pid not in cur_pos:
+                    continue
+                x0, y0 = cur_pos[pid]
+                x1, y1 = cmd.target_x_mm, cmd.target_y_mm
+                self._plan_arrows.append((x0, y0, x1, y1, wave_idx, total_waves))
+            # Advance positions
+            for cmd in wave_cmds:
+                cur_pos[cmd.piece_id] = (cmd.target_x_mm, cmd.target_y_mm)
+
         self.update()
 
     def clear_selection(self) -> None:
@@ -194,6 +240,7 @@ class ChessBoardWidget(QWidget):
         self._draw_background(painter)
         self._draw_outer_outline(painter)
         self._draw_grid(painter)
+        self._draw_plan_paths(painter)
         self._draw_target_indicator(painter)
         self._draw_pieces(painter)
 
@@ -256,6 +303,73 @@ class ChessBoardWidget(QWidget):
         for row in range(n + 1):
             _, cy = self._pa_to_canvas(0, float(row * s))
             p.drawLine(QPointF(cx0, cy), QPointF(cx1, cy))
+
+    def _draw_plan_paths(self, p: QPainter) -> None:
+        """Draw colored wave arrows for planned moves."""
+        if not self._plan_arrows:
+            return
+
+        def _wave_color(wave_idx: int, total: int) -> QColor:
+            """Green → orange → red gradient by wave index."""
+            if total <= 1:
+                t = 0.0
+            else:
+                t = wave_idx / (total - 1)
+            # Green (#00C060) → orange (#FFA020) → red (#FF3030)
+            if t <= 0.5:
+                s = t * 2.0
+                r = int(0x00 + (0xFF - 0x00) * s)
+                g = int(0xC0 + (0xA0 - 0xC0) * s)
+                b = int(0x60 + (0x20 - 0x60) * s)
+            else:
+                s = (t - 0.5) * 2.0
+                r = 0xFF
+                g = int(0xA0 + (0x30 - 0xA0) * s)
+                b = int(0x20 + (0x30 - 0x20) * s)
+            return QColor(r, g, b, 200)
+
+        ARROW_HEAD_MM  = 8.0
+        ARROW_HALF_ANG = math.radians(25)
+        LINE_W         = 2.0
+
+        for (x0, y0, x1, y1, wave_idx, total_waves) in self._plan_arrows:
+            cx0, cy0 = self._pa_to_canvas(x0, y0)
+            cx1, cy1 = self._pa_to_canvas(x1, y1)
+
+            color = _wave_color(wave_idx, total_waves)
+            pen   = QPen(color)
+            pen.setWidthF(LINE_W)
+            p.setPen(pen)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawLine(QPointF(cx0, cy0), QPointF(cx1, cy1))
+
+            # Arrowhead
+            dx = cx1 - cx0
+            dy = cy1 - cy0
+            mag = math.hypot(dx, dy)
+            if mag < 1e-6:
+                continue
+            ux, uy = dx / mag, dy / mag
+            # Arrowhead base point back along the line
+            bx = cx1 - ux * ARROW_HEAD_MM
+            by = cy1 - uy * ARROW_HEAD_MM
+            cos_a = math.cos(ARROW_HALF_ANG)
+            sin_a = math.sin(ARROW_HALF_ANG)
+            # Two wing points
+            w1x = bx + (-uy * sin_a + ux * (cos_a - 1)) * ARROW_HEAD_MM
+            w1y = by + ( ux * sin_a + uy * (cos_a - 1)) * ARROW_HEAD_MM
+            w2x = bx + ( uy * sin_a + ux * (cos_a - 1)) * ARROW_HEAD_MM
+            w2y = by + (-ux * sin_a + uy * (cos_a - 1)) * ARROW_HEAD_MM
+
+            from PyQt6.QtGui import QPolygonF
+            tip   = QPointF(cx1, cy1)
+            wing1 = QPointF(w1x, w1y)
+            wing2 = QPointF(w2x, w2y)
+            poly  = QPolygonF([tip, wing1, wing2])
+
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(color))
+            p.drawPolygon(poly)
 
     def _draw_target_indicator(self, p: QPainter) -> None:
         if self._target is None or self._selected_id is None:
