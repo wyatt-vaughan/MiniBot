@@ -435,6 +435,9 @@ class MainWindow(QMainWindow):
         # Path planning → board visualization
         self._path_tab.plan_visualized.connect(self._on_plan_visualized)
 
+        # Path planning assignment-optimizer → debug log
+        self._path_tab.planning_log.connect(self._debug_tab.on_sim_log)
+
         # Debug tab → send (serial or sim) + simulator toggle
         self._debug_tab.send_raw.connect(self._on_debug_send_raw)
         self._debug_tab.simulator_mode_changed.connect(self._on_sim_mode_changed)

@@ -237,6 +237,8 @@ class PLANNING:
     CONFLICT_ARRIVAL_EPS_MM       = 2.0
     CONFLICT_DOCK_EPS_MM          = 8.0
     CONFLICT_MAX_ITERATIONS       = 200
+    CONFLICT_MAX_SEGMENT_MM       = 200.0   # longest single wave segment allowed
+    CONFLICT_MIN_SEGMENT_MW_MM    = 5.0     # min segment for make-way routines
     CONFLICT_DETOUR_DISTANCE_MM   = 100.0
     CONFLICT_DETOUR_HOLD_ITERS    = 3
     CONFLICT_MAX_DETOUR_CHAIN     = 10

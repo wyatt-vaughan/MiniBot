@@ -13,9 +13,14 @@ Path Planning tab:
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+import logging
+import time
+from itertools import permutations, product
+from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtCore import pyqtSignal, pyqtSlot, Qt
+
+log = logging.getLogger(__name__)
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QSizePolicy,
@@ -35,8 +40,9 @@ class PathPlanningTab(QWidget):
         plan_visualized(list, dict)        — emitted after planning to update board arrows
     """
 
-    send_commands   = pyqtSignal(list)  # list[MoveCommand]
+    send_commands   = pyqtSignal(list)   # list[MoveCommand]
     plan_visualized = pyqtSignal(list, dict)  # commands, initial_positions
+    planning_log    = pyqtSignal(str)    # debug message → debug tab log
 
     def __init__(self, board_state: BoardState, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -67,6 +73,13 @@ class PathPlanningTab(QWidget):
         if default_idx >= 0:
             self._algo_combo.setCurrentIndex(default_idx)
         algo_layout.addWidget(self._algo_combo)
+        self._chk_optimize_assignment = QCheckBox('Optimize Assignment')
+        self._chk_optimize_assignment.setToolTip(
+            'Test every permutation of interchangeable-piece target assignments\n'
+            'and keep the plan with the shortest total execution time.\n'
+            'Results are logged to the Debug tab.  May be slow for many pieces.'
+        )
+        algo_layout.addWidget(self._chk_optimize_assignment)
         root.addWidget(algo_group)
 
         # --- Target ---
@@ -183,9 +196,12 @@ class PathPlanningTab(QWidget):
         self._target_x.setValue(x_mm)
         self._target_y.setValue(y_mm)
 
-        planner   = self._get_planner()
-        positions = {piece_id: (piece.x_mm, piece.y_mm)}
-        targets   = {piece_id: (x_mm, y_mm)}
+        from planning.enhanced_conflict_planner import EnhancedConflictPlanner
+        planner   = EnhancedConflictPlanner()
+        positions = {p.piece_id: (p.x_mm, p.y_mm) for p in self._board.active_pieces()}
+        # All bystanders return to their current position; target piece gets its new goal.
+        targets   = dict(positions)
+        targets[piece_id] = (x_mm, y_mm)
 
         def _validator(pid: int, tx: float, ty: float) -> bool:
             return self._board.validate_move(pid, tx, ty)
@@ -209,9 +225,12 @@ class PathPlanningTab(QWidget):
         if piece is None:
             return
 
-        planner = self._get_planner()
-        positions = {piece_id: (piece.x_mm, piece.y_mm)}
-        targets   = {piece_id: (target_x, target_y)}
+        from planning.enhanced_conflict_planner import EnhancedConflictPlanner
+        planner   = EnhancedConflictPlanner()
+        positions = {p.piece_id: (p.x_mm, p.y_mm) for p in self._board.active_pieces()}
+        # All bystanders return to their current position; target piece gets its new goal.
+        targets   = dict(positions)
+        targets[piece_id] = (target_x, target_y)
         validator = self._board.validate_move  # chess engine hook
 
         def _validator(pid: int, tx: float, ty: float) -> bool:
@@ -233,8 +252,11 @@ class PathPlanningTab(QWidget):
                 positions[piece.piece_id] = (piece.x_mm, piece.y_mm)
                 targets[piece.piece_id]   = (float(home[0]), float(home[1]))
 
-        # Override duration from config
-        commands = planner.plan_moves(positions, targets)
+        if self._chk_optimize_assignment.isChecked():
+            commands = self._exhaustive_assignment_plan(planner, positions, targets)
+        else:
+            commands = planner.plan_moves(positions, targets)
+
         for cmd in commands:
             cmd.duration_ms = PL.HOME_MOVE_DURATION_MS
         self._viz_positions = {}  # fresh snapshot for new plan
@@ -258,10 +280,162 @@ class PathPlanningTab(QWidget):
     def _on_send(self) -> None:
         if self._move_queue:
             self.send_commands.emit(list(self._move_queue))
+            self._on_clear_queue()
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    # Maximum number of planner calls the exhaustive search will make.
+    _MAX_EXHAUSTIVE_PLANS: int = 200
+
+    @staticmethod
+    def _plan_score(commands: List[MoveCommand]) -> float:
+        """Estimate total execution time (ms) for a list of commands.
+
+        Waves run sequentially; the duration of each wave is the longest
+        command in that wave.  Returns inf for empty/None plans.
+        """
+        if not commands:
+            return float('inf')
+        waves: Dict[int, float] = {}
+        for cmd in commands:
+            waves[cmd.sequence_num] = max(waves.get(cmd.sequence_num, 0.0),
+                                          float(cmd.duration_ms))
+        return sum(waves.values())
+
+    def _exhaustive_assignment_plan(
+        self,
+        planner,
+        positions: Dict[int, Tuple[float, float]],
+        targets:   Dict[int, Tuple[float, float]],
+    ) -> List[MoveCommand]:
+        """Run the planner for every permutation of interchangeable-piece
+        target assignments and return the plan with the lowest total time.
+
+        Interchangeable groups: pieces of the same colour and piece type
+        (pawn / bishop / rook / knight) that are currently active.
+        Kings and queens are unique and are never reassigned.
+
+        The search is capped at ``_MAX_EXHAUSTIVE_PLANS`` total planner calls.
+        Results are emitted via the ``planning_log`` signal so the Debug tab
+        can display them.
+        """
+        from config import PIECES
+
+        # ---- Build interchangeable groups --------------------------------
+        groups: Dict[tuple, List[int]] = {}
+        for pid in positions:
+            rank = PIECES.PIECE_RANKS.get(pid, '')
+            if rank not in ('pawn', 'bishop', 'rook', 'knight'):
+                continue
+            colour = 'white' if pid in PIECES.WHITE_IDS else 'black'
+            groups.setdefault((colour, rank), []).append(pid)
+
+        # Keep only groups with ≥2 active pieces
+        groups = {k: sorted(v) for k, v in groups.items() if len(v) >= 2}
+
+        if not groups:
+            self.planning_log.emit('[AssignOpt] No interchangeable groups — running single plan.')
+            return planner.plan_moves(positions, targets)
+
+        # ---- Generate permutations per group (with per-group cap) --------
+        _PER_GROUP_CAP = 48   # 4! = 24; avoids explosion for 5+ pieces/group
+        group_keys    = sorted(groups.keys())
+        group_pids    = [groups[k] for k in group_keys]
+        group_slots   = [[targets[pid] for pid in pids] for pids in group_pids]
+        group_perms   = []
+        for i, (key, pids, slots) in enumerate(zip(group_keys, group_pids, group_slots)):
+            perms = list(permutations(slots))
+            if len(perms) > _PER_GROUP_CAP:
+                self.planning_log.emit(
+                    f'[AssignOpt] Group {key[0]}_{key[1]}: {len(perms)} perms '
+                    f'— capping to {_PER_GROUP_CAP}.'
+                )
+                perms = perms[:_PER_GROUP_CAP]
+            group_perms.append(perms)
+
+        total_combos = 1
+        for perms in group_perms:
+            total_combos *= len(perms)
+
+        if total_combos > self._MAX_EXHAUSTIVE_PLANS:
+            self.planning_log.emit(
+                f'[AssignOpt] {total_combos} combinations exceed cap '
+                f'{self._MAX_EXHAUSTIVE_PLANS} — truncating.'
+            )
+            # Flatten to at most _MAX_EXHAUSTIVE_PLANS by reducing each group
+            # proportionally (simplistic: just cap total via product truncation)
+            cap_per = max(1, int(self._MAX_EXHAUSTIVE_PLANS ** (1.0 / len(group_perms))))
+            group_perms = [p[:cap_per] for p in group_perms]
+            total_combos = 1
+            for perms in group_perms:
+                total_combos *= len(perms)
+
+        group_summary = ', '.join(
+            f'{k[0]}_{k[1]}({len(p)} perms)'
+            for k, p in zip(group_keys, group_perms)
+        )
+        self.planning_log.emit(
+            f'[AssignOpt] Groups: {group_summary}  — {total_combos} total combinations.'
+        )
+
+        # ---- Exhaustive search -------------------------------------------
+        best_score:    float            = float('inf')
+        best_commands: List[MoveCommand] = []
+        best_trial:    int              = -1
+
+        for trial_idx, combo in enumerate(product(*group_perms), start=1):
+            # Build trial target assignment
+            trial_targets = dict(targets)
+            desc_parts: List[str] = []
+            for key, pids, perm in zip(group_keys, group_pids, combo):
+                for pid, slot in zip(pids, perm):
+                    trial_targets[pid] = slot
+                # Human-readable: show pid→slot column letter
+                mapping = '  '.join(
+                    f'0x{pid:02X}->({slot[0]:.0f},{slot[1]:.0f})'
+                    for pid, slot in zip(pids, perm)
+                )
+                desc_parts.append(f'[{key[0]}_{key[1]}: {mapping}]')
+
+            t0 = time.perf_counter()
+            try:
+                commands = planner.plan_moves(positions, trial_targets)
+            except Exception as exc:
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+                self.planning_log.emit(
+                    f'[AssignOpt] Trial {trial_idx}/{total_combos}: EXCEPTION {exc} '
+                    f'({elapsed_ms:.0f} ms)  {" ".join(desc_parts)}'
+                )
+                log.warning('[AssignOpt] Trial %d exception: %s', trial_idx, exc)
+                continue
+
+            score      = self._plan_score(commands)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            is_best    = score < best_score
+            tag        = ' *** BEST ***' if is_best else ''
+
+            self.planning_log.emit(
+                f'[AssignOpt] Trial {trial_idx}/{total_combos}: '
+                f'score={score:.0f} ms  cmds={len(commands)}  '
+                f'plan_time={elapsed_ms:.0f} ms{tag}  '
+                + '  '.join(desc_parts)
+            )
+
+            if is_best:
+                best_score    = score
+                best_commands = commands
+                best_trial    = trial_idx
+
+        if best_commands:
+            self.planning_log.emit(
+                f'[AssignOpt] Done. Best trial={best_trial}  score={best_score:.0f} ms.'
+            )
+            return best_commands
+
+        self.planning_log.emit('[AssignOpt] All trials failed — falling back to default plan.')
+        return planner.plan_moves(positions, targets)
 
     def _get_planner(self) -> BasePlanner:
         name = self._algo_combo.currentText()

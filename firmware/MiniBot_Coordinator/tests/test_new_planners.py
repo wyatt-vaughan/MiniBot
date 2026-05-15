@@ -24,8 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from config import PIECES, SIMULATOR, PLANNING
 from planning.base_planner import MoveCommand
 from planning.enhanced_conflict_planner import EnhancedConflictPlanner
-from planning.staging_planner import StagingPlanner
-from planning.conflict_planner import _optimise_targets_optimal
+from planning.enhanced_conflict_planner import _optimise_targets_optimal
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
@@ -343,7 +342,6 @@ TESTS = [
 
 PLANNER_REGISTRY = {
     'makeway': ('EnhancedConflictPlanner', EnhancedConflictPlanner),
-    'staging': ('StagingPlanner',  StagingPlanner),
 }
 
 
