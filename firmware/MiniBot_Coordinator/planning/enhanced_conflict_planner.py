@@ -217,6 +217,7 @@ class EnhancedConflictPlanner(BasePlanner):
         targets:         Dict[int, Tuple[float, float]],
         orientations:    Optional[Dict[int, float]] = None,
         validator:       Optional[Callable[[int, float, float], bool]] = None,
+        skip_target_optimisation: bool = False,
     ) -> List[MoveCommand]:
         del orientations
         if not targets:
@@ -234,7 +235,8 @@ class EnhancedConflictPlanner(BasePlanner):
             return []
 
         # -- Optimization: reassign targets among interchangeable pieces -------
-        goals = _optimise_targets_optimal(pos, goals)
+        if not skip_target_optimisation:
+            goals = _optimise_targets_optimal(pos, goals)
 
         commands: List[MoveCommand] = []
         seq             = 0

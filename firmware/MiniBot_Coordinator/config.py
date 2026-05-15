@@ -265,6 +265,11 @@ class PLANNING:
     MAKE_WAY_CYCLE_GRID_MM     = 5
     MAKE_WAY_CYCLE_HISTORY     = 10
 
+    # "Optimize Assignment" exhaustive search cap: max planner calls per run.
+    OPTIMIZE_ASSIGNMENT_MAX_TRIALS  = 500
+    # Number of parallel worker processes used by the exhaustive search.
+    OPTIMIZE_ASSIGNMENT_WORKERS     = 16
+
     # StagingPlanner — pawn staging squares (centre positions in mm)
     # White left cluster: a2, a3, b2, b3
     STAGING_WHITE_LEFT  = [(25, 75), (25, 125), (75, 75), (75, 125)]

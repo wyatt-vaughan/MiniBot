@@ -13,8 +13,10 @@ Path Planning tab:
 
 from __future__ import annotations
 
+import itertools
 import logging
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import permutations, product
 from typing import Dict, List, Optional, Tuple
 
@@ -30,6 +32,45 @@ from PyQt6.QtWidgets import (
 from config import PIECES, PLANNING
 from models.piece import BoardState
 from planning.base_planner import BasePlanner, MoveCommand, load_planner
+
+
+# ---------------------------------------------------------------------------
+# Module-level worker — must be at module scope so ProcessPoolExecutor can
+# pickle it on Windows (spawn start method).
+# ---------------------------------------------------------------------------
+
+def _assignment_trial_worker(
+    args: tuple,
+) -> tuple:
+    """Run one planner trial in a subprocess.
+
+    Args:
+        args: (trial_idx, positions, trial_targets)
+
+    Returns:
+        (trial_idx, score, n_commands, elapsed_ms, error_str or None)
+        Commands themselves are NOT returned to avoid large pickle payloads;
+        the main process re-runs the winner once to obtain the final command list.
+    """
+    trial_idx, positions, trial_targets = args
+    import time as _time
+    from planning.enhanced_conflict_planner import EnhancedConflictPlanner
+    planner = EnhancedConflictPlanner()
+    t0 = _time.perf_counter()
+    try:
+        commands = planner.plan_moves(positions, trial_targets,
+                                      skip_target_optimisation=True)
+        elapsed_ms = (_time.perf_counter() - t0) * 1000
+        # Compute score: sum of per-wave max durations
+        waves: dict = {}
+        for cmd in commands:
+            waves[cmd.sequence_num] = max(
+                waves.get(cmd.sequence_num, 0.0), float(cmd.duration_ms))
+        score = sum(waves.values()) if waves else float('inf')
+        return (trial_idx, score, len(commands), elapsed_ms, None)
+    except Exception as exc:
+        elapsed_ms = (_time.perf_counter() - t0) * 1000
+        return (trial_idx, float('inf'), 0, elapsed_ms, str(exc))
 
 
 class PathPlanningTab(QWidget):
@@ -286,8 +327,10 @@ class PathPlanningTab(QWidget):
     # Helpers
     # ------------------------------------------------------------------
 
-    # Maximum number of planner calls the exhaustive search will make.
-    _MAX_EXHAUSTIVE_PLANS: int = 200
+    # Maximum number of planner calls the exhaustive search will make (also in config.py).
+    @property
+    def _MAX_EXHAUSTIVE_PLANS(self) -> int:
+        return int(getattr(PLANNING, 'OPTIMIZE_ASSIGNMENT_MAX_TRIALS', 200))
 
     @staticmethod
     def _plan_score(commands: List[MoveCommand]) -> float:
@@ -339,100 +382,89 @@ class PathPlanningTab(QWidget):
             self.planning_log.emit('[AssignOpt] No interchangeable groups — running single plan.')
             return planner.plan_moves(positions, targets)
 
-        # ---- Generate permutations per group (with per-group cap) --------
-        _PER_GROUP_CAP = 48   # 4! = 24; avoids explosion for 5+ pieces/group
-        group_keys    = sorted(groups.keys())
-        group_pids    = [groups[k] for k in group_keys]
-        group_slots   = [[targets[pid] for pid in pids] for pids in group_pids]
-        group_perms   = []
-        for i, (key, pids, slots) in enumerate(zip(group_keys, group_pids, group_slots)):
-            perms = list(permutations(slots))
-            if len(perms) > _PER_GROUP_CAP:
-                self.planning_log.emit(
-                    f'[AssignOpt] Group {key[0]}_{key[1]}: {len(perms)} perms '
-                    f'— capping to {_PER_GROUP_CAP}.'
-                )
-                perms = perms[:_PER_GROUP_CAP]
-            group_perms.append(perms)
+        # ---- Generate permutations per group --------------------------------
+        cap = self._MAX_EXHAUSTIVE_PLANS
+        group_keys  = sorted(groups.keys())
+        group_pids  = [groups[k] for k in group_keys]
+        group_slots = [[targets[pid] for pid in pids] for pids in group_pids]
+        group_perms = [list(permutations(slots)) for slots in group_slots]
 
         total_combos = 1
         for perms in group_perms:
             total_combos *= len(perms)
 
-        if total_combos > self._MAX_EXHAUSTIVE_PLANS:
-            self.planning_log.emit(
-                f'[AssignOpt] {total_combos} combinations exceed cap '
-                f'{self._MAX_EXHAUSTIVE_PLANS} — truncating.'
-            )
-            # Flatten to at most _MAX_EXHAUSTIVE_PLANS by reducing each group
-            # proportionally (simplistic: just cap total via product truncation)
-            cap_per = max(1, int(self._MAX_EXHAUSTIVE_PLANS ** (1.0 / len(group_perms))))
-            group_perms = [p[:cap_per] for p in group_perms]
-            total_combos = 1
-            for perms in group_perms:
-                total_combos *= len(perms)
-
         group_summary = ', '.join(
             f'{k[0]}_{k[1]}({len(p)} perms)'
             for k, p in zip(group_keys, group_perms)
         )
+        run_count = min(total_combos, cap)
         self.planning_log.emit(
-            f'[AssignOpt] Groups: {group_summary}  — {total_combos} total combinations.'
+            f'[AssignOpt] Groups: {group_summary}  — '
+            f'{total_combos} total combinations, running {run_count}.'
         )
 
-        # ---- Exhaustive search -------------------------------------------
-        best_score:    float            = float('inf')
-        best_commands: List[MoveCommand] = []
-        best_trial:    int              = -1
+        # ---- Build trial argument list -----------------------------------
+        n_workers = int(getattr(PLANNING, 'OPTIMIZE_ASSIGNMENT_WORKERS', 16))
+        trial_args: List[tuple] = []
+        trial_desc: Dict[int, str] = {}   # trial_idx → human-readable description
 
-        for trial_idx, combo in enumerate(product(*group_perms), start=1):
-            # Build trial target assignment
+        for trial_idx, combo in enumerate(
+                itertools.islice(product(*group_perms), cap), start=1):
             trial_targets = dict(targets)
             desc_parts: List[str] = []
             for key, pids, perm in zip(group_keys, group_pids, combo):
                 for pid, slot in zip(pids, perm):
                     trial_targets[pid] = slot
-                # Human-readable: show pid→slot column letter
                 mapping = '  '.join(
                     f'0x{pid:02X}->({slot[0]:.0f},{slot[1]:.0f})'
                     for pid, slot in zip(pids, perm)
                 )
                 desc_parts.append(f'[{key[0]}_{key[1]}: {mapping}]')
+            trial_args.append((trial_idx, positions, trial_targets))
+            trial_desc[trial_idx] = '  '.join(desc_parts)
 
-            t0 = time.perf_counter()
-            try:
-                commands = planner.plan_moves(positions, trial_targets)
-            except Exception as exc:
-                elapsed_ms = (time.perf_counter() - t0) * 1000
+        # ---- Parallel exhaustive search ----------------------------------
+        best_score:      float           = float('inf')
+        best_trial_idx:  int             = -1
+        best_trial_targets: Optional[Dict] = None
+
+        wall_t0 = time.perf_counter()
+        with ProcessPoolExecutor(max_workers=min(n_workers, len(trial_args))) as pool:
+            futures = {pool.submit(_assignment_trial_worker, a): a[0]
+                       for a in trial_args}
+            for fut in as_completed(futures):
+                trial_idx, score, n_cmds, elapsed_ms, err = fut.result()
+                desc = trial_desc[trial_idx]
+                if err:
+                    self.planning_log.emit(
+                        f'[AssignOpt] Trial {trial_idx}/{run_count}: '
+                        f'EXCEPTION {err} ({elapsed_ms:.0f} ms)  {desc}'
+                    )
+                    log.warning('[AssignOpt] Trial %d exception: %s', trial_idx, err)
+                    continue
+                is_best = score < best_score
+                tag = ' *** BEST ***' if is_best else ''
                 self.planning_log.emit(
-                    f'[AssignOpt] Trial {trial_idx}/{total_combos}: EXCEPTION {exc} '
-                    f'({elapsed_ms:.0f} ms)  {" ".join(desc_parts)}'
+                    f'[AssignOpt] Trial {trial_idx}/{run_count}: '
+                    f'score={score:.0f} ms  cmds={n_cmds}  '
+                    f'plan_time={elapsed_ms:.0f} ms{tag}  {desc}'
                 )
-                log.warning('[AssignOpt] Trial %d exception: %s', trial_idx, exc)
-                continue
+                if is_best:
+                    best_score      = score
+                    best_trial_idx  = trial_idx
+                    best_trial_targets = trial_args[trial_idx - 1][2]
 
-            score      = self._plan_score(commands)
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            is_best    = score < best_score
-            tag        = ' *** BEST ***' if is_best else ''
+        wall_ms = (time.perf_counter() - wall_t0) * 1000
 
+        # Re-run the winner in-process to obtain the actual command list
+        if best_trial_targets is not None:
             self.planning_log.emit(
-                f'[AssignOpt] Trial {trial_idx}/{total_combos}: '
-                f'score={score:.0f} ms  cmds={len(commands)}  '
-                f'plan_time={elapsed_ms:.0f} ms{tag}  '
-                + '  '.join(desc_parts)
+                f'[AssignOpt] Done. Best trial={best_trial_idx}  '
+                f'score={best_score:.0f} ms  wall={wall_ms:.0f} ms  '
+                f'(re-running winner to build commands)'
             )
-
-            if is_best:
-                best_score    = score
-                best_commands = commands
-                best_trial    = trial_idx
-
-        if best_commands:
-            self.planning_log.emit(
-                f'[AssignOpt] Done. Best trial={best_trial}  score={best_score:.0f} ms.'
-            )
-            return best_commands
+            return planner.plan_moves(positions, best_trial_targets,
+                                      skip_target_optimisation=True)
 
         self.planning_log.emit('[AssignOpt] All trials failed — falling back to default plan.')
         return planner.plan_moves(positions, targets)
