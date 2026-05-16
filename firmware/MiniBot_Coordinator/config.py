@@ -266,7 +266,7 @@ class PLANNING:
     MAKE_WAY_CYCLE_HISTORY     = 10
 
     # "Optimize Assignment" exhaustive search cap: max planner calls per run.
-    OPTIMIZE_ASSIGNMENT_MAX_TRIALS  = 500
+    OPTIMIZE_ASSIGNMENT_MAX_TRIALS  = 250
     # Number of parallel worker processes used by the exhaustive search.
     OPTIMIZE_ASSIGNMENT_WORKERS     = 16
 
