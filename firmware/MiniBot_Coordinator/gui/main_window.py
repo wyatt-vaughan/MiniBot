@@ -455,8 +455,8 @@ class MainWindow(QMainWindow):
         # Position tracker → poll (always serial)
         self._track_tab.send_raw.connect(self._handler.send)
 
-        # Command looper → send (always serial)
-        self._looper_tab.send_raw.connect(self._handler.send)
+        # Command looper → planned move dispatch (rotate-then-straight, same as right-click)
+        self._looper_tab.request_move.connect(self._on_looper_request_move)
 
         # Serial handler → board updates + UI
         self._handler.position_received.connect(self._on_position_received)
@@ -499,6 +499,27 @@ class MainWindow(QMainWindow):
         targets   = {piece_id: (x_mm, y_mm)}
         commands  = planner.plan_moves(positions, targets)
         if commands:
+            self._on_send_move_commands(commands)
+
+    @pyqtSlot(int, float, float, int)
+    def _on_looper_request_move(self, piece_id: int, x_mm: float, y_mm: float, move_time_ms: int) -> None:
+        """Dispatch a planned move from the command looper.
+
+        Mirrors right-click behavior: piece auto-rotates to face the target,
+        then drives in a straight line. Uses move_time_ms to override the
+        planner's computed duration on every generated command.
+        """
+        from planning.enhanced_conflict_planner import EnhancedConflictPlanner
+        piece = self._board.get_piece(piece_id)
+        if piece is None:
+            return
+        planner   = EnhancedConflictPlanner()
+        positions = {piece_id: (piece.x_mm, piece.y_mm)}
+        targets   = {piece_id: (x_mm, y_mm)}
+        commands  = planner.plan_moves(positions, targets)
+        if commands:
+            for cmd in commands:
+                cmd.duration_ms = move_time_ms
             self._on_send_move_commands(commands)
 
     @pyqtSlot(list)

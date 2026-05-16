@@ -22,22 +22,18 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from comms.protocol import build_position_command
-
 
 @dataclass
 class LoopCommand:
     """One entry in the command loop list."""
     x_mm:        float
     y_mm:        float
-    theta_deg:   float
     move_time_ms: int
     delay_ms:    int  # wait after previous command before sending this one
 
     def display_text(self) -> str:
         return (
             f"X={self.x_mm:.1f}  Y={self.y_mm:.1f}  "
-            f"θ={self.theta_deg:.1f}°  "
             f"Move={self.move_time_ms} ms  "
             f"Delay={self.delay_ms} ms"
         )
@@ -50,7 +46,7 @@ class CommandLooperTab(QWidget):
         send_raw(bytes) — emit bytes to the serial handler
     """
 
-    send_raw = pyqtSignal(bytes)
+    request_move = pyqtSignal(int, float, float, int)  # piece_id, x_mm, y_mm, move_time_ms
 
     _BROADCAST_ID = 0xFF
 
@@ -101,19 +97,7 @@ class CommandLooperTab(QWidget):
         row1.addStretch()
         form_layout.addLayout(row1)
 
-        # Row 2: Orientation
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel('Orientation (°):'))
-        self._spin_theta = QDoubleSpinBox()
-        self._spin_theta.setRange(-360.0, 360.0)
-        self._spin_theta.setDecimals(1)
-        self._spin_theta.setSingleStep(15.0)
-        self._spin_theta.setValue(0.0)
-        row2.addWidget(self._spin_theta)
-        row2.addStretch()
-        form_layout.addLayout(row2)
-
-        # Row 3: Move time / Command delay
+        # Row 2: Move time / Command delay
         row3 = QHBoxLayout()
         row3.addWidget(QLabel('Move Time (ms):'))
         self._spin_move_time = QSpinBox()
@@ -203,7 +187,6 @@ class CommandLooperTab(QWidget):
         cmd = LoopCommand(
             x_mm=self._spin_x.value(),
             y_mm=self._spin_y.value(),
-            theta_deg=self._spin_theta.value(),
             move_time_ms=self._spin_move_time.value(),
             delay_ms=self._spin_delay.value(),
         )
@@ -280,14 +263,11 @@ class CommandLooperTab(QWidget):
             return
 
         cmd = self._commands[self._loop_index]
-        self.send_raw.emit(
-            build_position_command(
-                self._spin_target_id.value(),
-                cmd.x_mm,
-                cmd.y_mm,
-                cmd.theta_deg,
-                cmd.move_time_ms,
-            )
+        self.request_move.emit(
+            self._spin_target_id.value(),
+            cmd.x_mm,
+            cmd.y_mm,
+            cmd.move_time_ms,
         )
         self._highlight_row(self._loop_index)
 
