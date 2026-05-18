@@ -503,24 +503,23 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(int, float, float, int)
     def _on_looper_request_move(self, piece_id: int, x_mm: float, y_mm: float, move_time_ms: int) -> None:
-        """Dispatch a planned move from the command looper.
+        """Dispatch a move from the command looper.
 
         Mirrors right-click behavior: piece auto-rotates to face the target,
-        then drives in a straight line. Uses move_time_ms to override the
-        planner's computed duration on every generated command.
+        then drives in a straight line.  Sends directly via _send_serial_move
+        to avoid interfering with the wave dispatch timer.
         """
-        from planning.enhanced_conflict_planner import EnhancedConflictPlanner
-        piece = self._board.get_piece(piece_id)
-        if piece is None:
-            return
-        planner   = EnhancedConflictPlanner()
-        positions = {piece_id: (piece.x_mm, piece.y_mm)}
-        targets   = {piece_id: (x_mm, y_mm)}
-        commands  = planner.plan_moves(positions, targets)
-        if commands:
-            for cmd in commands:
-                cmd.duration_ms = move_time_ms
-            self._on_send_move_commands(commands)
+        cmd = MoveCommand(
+            piece_id    = piece_id,
+            target_x_mm = x_mm,
+            target_y_mm = y_mm,
+            duration_ms = move_time_ms,
+        )
+        if self._sim_mode:
+            self._simulator.speed_mm_s = self._debug_tab.simulator_speed_mm_s
+            self._simulator.queue_moves([cmd])
+        else:
+            self._send_serial_move(cmd)
 
     @pyqtSlot(list)
     def _on_send_move_commands(self, commands: List[MoveCommand]) -> None:

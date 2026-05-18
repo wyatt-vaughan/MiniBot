@@ -302,6 +302,8 @@ class EnhancedConflictPlanner(BasePlanner):
                         mw_waves = self._evict_and_make_way(
                             remaining, pos, goals, validator)
                     if mw_waves:
+                        mw_waves = self._try_parallel_make_way(
+                            remaining, pos, goals, validator, mw_waves)
                         for mw_wave in mw_waves:
                             snap = dict(pos)
                             for pid_mv, start, end, note in mw_wave:
@@ -485,6 +487,8 @@ class EnhancedConflictPlanner(BasePlanner):
                         mw_waves = self._evict_and_make_way(
                             remaining, pos, goals, validator)
                     if mw_waves:
+                        mw_waves = self._try_parallel_make_way(
+                            remaining, pos, goals, validator, mw_waves)
                         for mw_wave in mw_waves:
                             snap = dict(pos)
                             for pid_mv, start, end, note in mw_wave:
@@ -1364,6 +1368,123 @@ class EnhancedConflictPlanner(BasePlanner):
 
         log.debug('[ECP] evict_and_make_way: no eviction helped')
         return None
+
+    # -- Parallel make-way ----------------------------------------------------
+
+    def _try_merge_mw_plans(
+        self,
+        plan_a:    List[List[_Move]],
+        plan_b:    List[List[_Move]],
+        start_pos: Dict[int, Vec2],
+    ) -> Optional[List[List[_Move]]]:
+        """Check whether plan_b can be parallelised with plan_a.
+
+        Two wave-plans can run in parallel if, at every wave level ``i``, every
+        cross-pair of moves (one from plan_a[i], one from plan_b[i]) passes
+        mutual ``_safe()`` checks:
+          - swept capsule vs. swept capsule (segment-segment distance)
+          - swept capsule vs. static opposite-plan pieces
+          - endpoint vs. endpoint
+
+        Returns the merged wave sequence (plan_a[i] + plan_b[i] at each level)
+        or ``None`` if any collision would occur.
+        """
+        pids_a = {m[0] for wave in plan_a for m in wave}
+        pids_b = {m[0] for wave in plan_b for m in wave}
+
+        # Plans that share a piece cannot be merged.
+        if pids_a & pids_b:
+            return None
+
+        max_waves = max(len(plan_a), len(plan_b))
+        # sim_pos tracks each piece's position as we step through wave levels.
+        sim_pos: Dict[int, Vec2] = dict(start_pos)
+        merged:  List[List[_Move]] = []
+
+        for i in range(max_waves):
+            wave_a = plan_a[i] if i < len(plan_a) else []
+            wave_b = plan_b[i] if i < len(plan_b) else []
+
+            movers_a = {m[0] for m in wave_a}
+            movers_b = {m[0] for m in wave_b}
+
+            # Check every plan_a move against the plan_b context.
+            # static_b  = plan_b pieces not currently moving (fixed obstacles).
+            # wave_b    = plan_b pieces currently moving (swept-capsule check).
+            for _pid, start, end, _ in wave_a:
+                static_b = {xid: sim_pos[xid]
+                            for xid in pids_b if xid not in movers_b}
+                if not self._safe(start, end, static_b, wave_b):
+                    return None
+
+            # Check every plan_b move against the plan_a context.
+            for _pid, start, end, _ in wave_b:
+                static_a = {xid: sim_pos[xid]
+                            for xid in pids_a if xid not in movers_a}
+                if not self._safe(start, end, static_a, wave_a):
+                    return None
+
+            merged.append(wave_a + wave_b)
+
+            # Advance simulated positions for the next wave level.
+            for pid, _, end, _ in (wave_a + wave_b):
+                sim_pos[pid] = end
+
+        return merged
+
+    def _try_parallel_make_way(
+        self,
+        remaining:    List[int],
+        pos:          Dict[int, Vec2],
+        goals:        Dict[int, Vec2],
+        validator:    Optional[Callable],
+        initial_plan: List[List[_Move]],
+    ) -> List[List[_Move]]:
+        """Extend a make-way plan by merging independent plans in parallel.
+
+        For each unaddressed stuck piece (not already handled by the initial
+        plan), attempts to build a ``_make_way_for`` plan and merges it with
+        the current combined plan if the two plans are mutually safe at every
+        wave level.  Pieces whose plans would conflict are skipped.
+
+        Returns the (possibly expanded) combined plan.  At minimum this is the
+        unchanged ``initial_plan``.
+        """
+        combined = initial_plan
+        claimed  = {m[0] for wave in combined for m in wave}
+
+        # Candidates: stuck pieces not already covered by the initial plan.
+        candidates = sorted(
+            [
+                pid for pid in remaining
+                if pid not in claimed
+                and _dist(pos[pid], goals[pid]) >= _MIN_SEG_MW
+            ],
+            key=lambda p: -_dist(pos[p], goals[p]),  # furthest-first
+        )
+
+        for priority_pid in candidates:
+            other_plan = self._make_way_for(priority_pid, pos, goals, validator)
+            if other_plan is None:
+                continue
+
+            merged = self._try_merge_mw_plans(combined, other_plan, pos)
+            if merged is not None:
+                combined = merged
+                new_claimed = {m[0] for wave in other_plan for m in wave}
+                claimed |= new_claimed
+                log.info(
+                    '[ECP] parallel_mw: merged plan for 0x%02X '
+                    '(%d waves) — %d pieces now running in parallel',
+                    priority_pid, len(other_plan), len(claimed),
+                )
+            else:
+                log.debug(
+                    '[ECP] parallel_mw: plan for 0x%02X conflicts — kept sequential',
+                    priority_pid,
+                )
+
+        return combined
 
     def _make_way(
         self,
