@@ -32,7 +32,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QWidget
 
-from config import BOARD, GUI, PIECES
+from config import BOARD, ELECTROMAGNETS, GUI, PIECES
 from models.piece import BoardState, Piece
 from planning.base_planner import MoveCommand
 
@@ -62,8 +62,9 @@ class ChessBoardWidget(QWidget):
         self._board = board_state
         self._selected_id: Optional[int] = None
         self._target: Optional[Tuple[float, float]] = None  # mm in playing area
-        self._hide_stale:  bool = False
-        self._stale_ids:   Set[int] = set()
+        self._hide_stale:          bool = False
+        self._stale_ids:           Set[int] = set()
+        self._show_electromagnets: bool = False
         # Plan visualization: list of (x0, y0, x1, y1, wave_idx, total_waves)
         self._plan_arrows: List[Tuple[float, float, float, float, int, int]] = []
 
@@ -88,6 +89,11 @@ class ChessBoardWidget(QWidget):
         """Update the set of piece IDs considered stale and whether to hide them."""
         self._stale_ids  = stale_ids
         self._hide_stale = hide
+        self.update()
+
+    def set_show_electromagnets(self, show: bool) -> None:
+        """Toggle display of electromagnet location rings."""
+        self._show_electromagnets = show
         self.update()
 
     def set_plan_visualization(
@@ -241,6 +247,7 @@ class ChessBoardWidget(QWidget):
         self._draw_outer_outline(painter)
         self._draw_grid(painter)
         self._draw_plan_paths(painter)
+        self._draw_electromagnets(painter)
         self._draw_target_indicator(painter)
         self._draw_pieces(painter)
 
@@ -370,6 +377,27 @@ class ChessBoardWidget(QWidget):
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QBrush(color))
             p.drawPolygon(poly)
+
+    def _draw_electromagnets(self, p: QPainter) -> None:
+        """Draw semi-transparent light-grey rings at each electromagnet location."""
+        if not self._show_electromagnets:
+            return
+
+        outer_r = ELECTROMAGNETS.OD_MM / 2.0
+        inner_r = ELECTROMAGNETS.ID_MM / 2.0
+        ring_w  = outer_r - inner_r
+
+        ring_color = QColor(200, 200, 200, 90)   # light grey, semi-transparent
+        pen = QPen(ring_color)
+        pen.setWidthF(ring_w)
+        pen.setCapStyle(Qt.PenCapStyle.FlatCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+
+        mid_r = (outer_r + inner_r) / 2.0
+        for (x_mm, y_mm) in ELECTROMAGNETS.POSITIONS:
+            cx, cy = self._pa_to_canvas(x_mm, y_mm)
+            p.drawEllipse(QPointF(cx, cy), mid_r, mid_r)
 
     def _draw_target_indicator(self, p: QPainter) -> None:
         if self._target is None or self._selected_id is None:

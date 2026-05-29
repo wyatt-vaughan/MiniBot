@@ -442,6 +442,7 @@ class MainWindow(QMainWindow):
         self._debug_tab.send_raw.connect(self._on_debug_send_raw)
         self._debug_tab.simulator_mode_changed.connect(self._on_sim_mode_changed)
         self._debug_tab.hide_stale_pieces_changed.connect(self._on_hide_stale_changed)
+        self._debug_tab.show_electromagnets_changed.connect(self._board_widget.set_show_electromagnets)
         self._debug_tab.randomize_positions.connect(self._on_randomize_positions)
         self._debug_tab.sim_collision_changed.connect(self._on_sim_collision_changed)
         self._debug_tab.clear_pending_moves.connect(self._simulator.stop_all)

@@ -298,6 +298,23 @@ class CHESS:
 
 
 # ---------------------------------------------------------------------------
+# ELECTROMAGNETS — physical electromagnet geometry and positions
+# All positions are in playing-area mm (same origin as piece coordinates).
+# ---------------------------------------------------------------------------
+class ELECTROMAGNETS:
+    # Ring geometry (mm)
+    OD_MM = 60.0   # outer diameter of the drawn ring indicator
+    ID_MM = 20.0   # inner diameter of the drawn ring indicator
+
+    # Centre positions (x_mm, y_mm) of each electromagnet in playing-area coords
+    POSITIONS = [
+        (250.0, 156.7),
+        (150.0, 156.7),
+        (200.0, 243.3),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # SIMULATOR — software-in-the-loop motion simulator
 # ---------------------------------------------------------------------------
 class SIMULATOR:

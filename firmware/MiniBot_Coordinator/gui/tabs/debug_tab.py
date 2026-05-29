@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from comms.protocol import build_position_command
-from config import COMM, PIECES, PLANNING, SIMULATOR
+from config import COMM, ELECTROMAGNETS, PIECES, PLANNING, SIMULATOR
 
 
 class DebugTab(QWidget):
@@ -32,12 +32,13 @@ class DebugTab(QWidget):
         hide_stale_pieces_changed(bool)  — True to hide pieces with no recent position
     """
 
-    send_raw                  = pyqtSignal(bytes)
-    simulator_mode_changed    = pyqtSignal(bool)   # True = simulator active
-    hide_stale_pieces_changed = pyqtSignal(bool)   # True = hide pieces unseen >5s
-    randomize_positions       = pyqtSignal()        # scatter all pieces randomly
-    sim_collision_changed     = pyqtSignal(bool)   # True = collision detection on
-    clear_pending_moves       = pyqtSignal()        # cancel all in-flight sim moves
+    send_raw                    = pyqtSignal(bytes)
+    simulator_mode_changed      = pyqtSignal(bool)   # True = simulator active
+    hide_stale_pieces_changed   = pyqtSignal(bool)   # True = hide pieces unseen >5s
+    show_electromagnets_changed = pyqtSignal(bool)   # True = show electromagnet rings
+    randomize_positions         = pyqtSignal()        # scatter all pieces randomly
+    sim_collision_changed       = pyqtSignal(bool)   # True = collision detection on
+    clear_pending_moves         = pyqtSignal()        # cancel all in-flight sim moves
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -169,6 +170,14 @@ class DebugTab(QWidget):
         self._hide_stale_check.setChecked(False)
         self._hide_stale_check.toggled.connect(self.hide_stale_pieces_changed)
         dl.addWidget(self._hide_stale_check)
+        self._show_em_check = QCheckBox(
+            f'Show electromagnet locations'
+            f'  (OD {ELECTROMAGNETS.OD_MM:.0f} mm / ID {ELECTROMAGNETS.ID_MM:.0f} mm,'
+            f'  {len(ELECTROMAGNETS.POSITIONS)} magnet{"s" if len(ELECTROMAGNETS.POSITIONS) != 1 else ""})'
+        )
+        self._show_em_check.setChecked(False)
+        self._show_em_check.toggled.connect(self.show_electromagnets_changed)
+        dl.addWidget(self._show_em_check)
         root.addWidget(disp_group)
 
         # --- Response log ---
