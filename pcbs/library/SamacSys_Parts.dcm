@@ -1,0 +1,177 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP NE555DR
+D Single Precision Timer
+K
+F http://www.ti.com/lit/ds/symlink/ne555.pdf
+$ENDCMP
+#
+$CMP VCNT2020
+D Optical Switches, Reflective, Phototransistor Output Ref Optical Sensor Transtr Output 940nm
+K
+F https://www.vishay.com/docs/84285/vcnt2020.pdf
+$ENDCMP
+#
+$CMP 74AHC1G08SE-7
+D DiodesZetex 74AHC1G08SE-7, AND 2 Input AND Schmitt Trigger, 2  5.5 V, 5-Pin SOT-353
+K
+F https://www.diodes.com//assets/Datasheets/74AHC1G08.pdf
+$ENDCMP
+#
+$CMP BAV21W-E3-18
+D Diodes - General Purpose, Power, Switching 250V 625mA 1A IFSM
+K
+F https://componentsearchengine.com/Datasheets/1/BAV21W-E3-18.pdf
+$ENDCMP
+#
+$CMP 1255AY-680M=P3
+D MURATA - 1255AY-680M=P3 - INDUCTOR, 68UH, 1A, 20%, WIREWOUND
+K
+F https://psearch.en.murata.com/inductor/product/1255AY-680M%23.html
+$ENDCMP
+#
+$CMP PTS815_SJM_250_SMTR_LFS
+D Tactile Switches Tact Switch, 12 VDC, 50 mA, 4.2x3.2, 2.5mm H, 180gf, J leads
+K
+F https://componentsearchengine.com/Datasheets/1/PTS815 SJM 250 SMTR LFS.pdf
+$ENDCMP
+#
+$CMP ESP32-H2-MINI-1-N2
+D Multiprotocol Modules ENGINEERING SAMPLE Bluetooth Low Energy and IEEE 802.15.4  module with ESP32-H2 chip
+K
+F https://www.espressif.com/sites/default/files/documentation/esp32-h2-mini-1_mini-1u_datasheet_en.pdf
+$ENDCMP
+#
+$CMP 217175-0001
+D Connector USB Type C Female 6Positions 0.5mm Right Angle SMT Embossed T/R - Tape and Reel
+K
+F https://www.molex.com/pdm_docs/sd/2171750001_sd.pdf
+$ENDCMP
+#
+$CMP USB4110-GF-A
+D CONN USB 2.0 TYPE-C R/A SMT
+K
+F https://gct.co/files/drawings/usb4110.pdf
+$ENDCMP
+#
+$CMP USBLC6-2P6
+D ESD Suppressors / TVS Diodes High Speed Interface Protection Low Cap
+K
+F https://datasheet.lcsc.com/szlcsc/STMicroelectronics-USBLC6-2P6_C15999.pdf
+$ENDCMP
+#
+$CMP ESP32-C3-MINI-1-H4X
+D Bluetooth, WiFi 802.11b/g/n, Bluetooth v5.0 Transceiver Module 2.412GHz ~ 2.484GHz PCB Trace Surface Mount
+K
+F 
+$ENDCMP
+#
+$CMP GSB1C41110SSHR
+D USB2.0, Type C, Top mount, Center Height 1.63mm, Single Row Surface Mount
+K
+F https://cdn.amphenol-cs.com/media/wysiwyg/files/drawing/gsb1c41x10sshr-ax1.pdf
+$ENDCMP
+#
+$CMP LM324QT
+D Operational Amplifiers - Op Amps Low Power QUAD 1.3 MHz 100dB
+K
+F https://www.st.com/resource/en/datasheet/lm324.pdf
+$ENDCMP
+#
+$CMP RP509Z331B-E2-F
+D Switching Voltage Regulators 0.5A/1A 6MHz PWM/VFM Step-down DCDC Converter with Synchronous Rectifier
+K
+F https://www.nisshinbo-microdevices.co.jp/en/pdf/datasheet/rp509-ea.pdf
+$ENDCMP
+#
+$CMP MIC23050-SYML-TR
+D MICROCHIP - MIC23050-SYML-TR - DC/DC CONV, SYNC BUCK, 4MHZ, 125DEG C
+K
+F http://www.microchip.com/mymicrochip/filehandler.aspx?ddocname=en580286
+$ENDCMP
+#
+$CMP RT9527GQW
+D RICHTEK - RT9527GQW - Battery Charger, 1 Cell of Li-Ion Battery, 6V Input, 4.2V/600mA Charge, WDFN-8
+K
+F https://www.richtek.com/assets/product_file/RT9527/DS9527-03.pdf
+$ENDCMP
+#
+$CMP EVP-AWBD4A
+D Tactile Switch SPST-NO Top Actuated Surface Mount
+K
+F https://industry.panasonic.com/ac/cdn/e/control/switch/light-touch/catalog/sw_lt_eng_3020s.pdf
+$ENDCMP
+#
+$CMP SSU-121BRT
+D Slide Switches Slide Switch, 1.2mm H, SPDT, 0.3A, 4VDC, 1.5mm Travel, Vertical Knob, R-667053
+K
+F https://www.mitsumi.co.jp/latest-M/Catalog/pdf/switch_ssu_e.pdf
+$ENDCMP
+#
+$CMP SLW-864587-2A-RA-N-D
+D 8.6 x 4.5 x 8.7 mm, 2 mm Raised Slide Actuator, Right Angle, Through Hole, Slide Switch
+K
+F https://www.sameskydevices.com/product/resource/slw-864587-2a-ra-n-d.pdf
+$ENDCMP
+#
+$CMP MCP73832T-2DFI_OT
+D Battery Management 4.2V Li-Ion/Li-Poly Chrg mgnt controller
+K
+F http://ww1.microchip.com/downloads/en/DeviceDoc/20001984g.pdf
+$ENDCMP
+#
+$CMP AP7375-33SA-7
+D LDO Voltage Regulators LDO CMOS LowCurr SOT23 T&R 3K
+K
+F https://www.diodes.com/assets/Datasheets/AP7375.pdf
+$ENDCMP
+#
+$CMP TC75S57FU_TE85L,F_
+D Analog Comparators CMOS type Op Amp USV 1.8V to 7V
+K
+F https://toshiba.semicon-storage.com/info/docget.jsp?did=20998&prodName=TC75S57F
+$ENDCMP
+#
+$CMP 74AHCT1G32SE-7
+D DiodesZetex 74AHCT1G32SE-7, 2-Input OR Logic Gate, 4.5  5.5 V, 5-Pin SOT-353
+K
+F https://www.diodes.com//assets/Datasheets/74AHCT1G32.pdf
+$ENDCMP
+#
+$CMP MMC5633NJL
+D Board Mount Hall Effect / Magnetic Sensors 30 Gauss, Monolithic , High Performance,
+K
+F https://media.digikey.com/pdf/Data%20Sheets/MEMSIC%20PDFs/MMC5633NJL_RevA_3-12-20.pdf
+$ENDCMP
+#
+$CMP PCM12SMTR
+D Slide Switches 0.3A SPDT ON-ON
+K
+F https://www.ckswitches.com/media/1424/pcm.pdf
+$ENDCMP
+#
+$CMP BTM9011EPXUMA1
+D Motor Driver Power MOSFET SPI PG-TSDSO-14
+K
+F https://www.infineon.com/dgdl/Infineon-Infineon-BTM901xEP-DS-v01_00-EN-DataSheet-v01_00-EN.pdf?fileId=8ac78c8c90530b3a01912d365ee4326f
+$ENDCMP
+#
+$CMP EASV2010RWA0
+D PCB Side View SMD LED Red-White - Tape and Reel
+K
+F https://everlightamericas.com/index.php?controller=attachment&id_attachment=2295
+$ENDCMP
+#
+$CMP MCP23S17T-E_ML
+D Interface - I/O Expanders 16bit Input/Output Exp SPI interface
+K
+F 
+$ENDCMP
+#
+$CMP DRV8210DRLR
+D Motor / Motion / Ignition Controllers & Drivers 12-V, 1.76-A brushed DC motor driver with auto sleep mode
+K
+F https://www.ti.com/lit/ds/symlink/drv8210.pdf?ts=1641207817417&ref_url=https%253A%252F%252Fwww.google.com%252F
+$ENDCMP
+#
+#End Doc Library
