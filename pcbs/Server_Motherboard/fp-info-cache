@@ -1,4 +1,4 @@
-22719475069764811
+22676292818274042
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -85763,216 +85763,6 @@ rotary encoder
 0
 7
 6
-SamacSys_Parts
-2171750001
-217175-0001
-Connector
-0
-10
-10
-SamacSys_Parts
-1255AY100MP3
-2424 (6060) T=4.5mm
-Inductor
-0
-2
-2
-SamacSys_Parts
-BGA4C40P2X2_85X85X60
-WLP package
-Integrated Circuit
-0
-4
-4
-SamacSys_Parts
-BGA6C40P2X3_88X128X69
-WLCSP-6-P6 Package
-Integrated Circuit
-0
-6
-6
-SamacSys_Parts
-EASV2010RWA0
-EASV2010RWA0-2
-LED
-0
-4
-4
-SamacSys_Parts
-ESP32C3MINI1H4X
-13.2 mm x 16.6 mm x 2.4 mm
-Undefined or Miscellaneous
-0
-61
-61
-SamacSys_Parts
-ESP32H2MINI1N2
-ESP32-H2-MINI-1-N2-1
-Integrated Circuit
-0
-61
-61
-SamacSys_Parts
-EVPAWBD4A
-EVP-AWBD4A-2
-Switch
-0
-2
-2
-SamacSys_Parts
-GSB1C41110SSHR
-GSB1C41110SSHR-1
-Connector
-0
-16
-16
-SamacSys_Parts
-NE555DR
-D (R-PDSO-G8)
-Integrated Circuit
-0
-8
-8
-SamacSys_Parts
-PCM12SMTR
-PCM12SMTR-1
-Switch
-0
-7
-7
-SamacSys_Parts
-PTS815SJM250SMTRLFS
-PTS815 SJM 250 SMTR LFS-2
-Switch
-0
-4
-4
-SamacSys_Parts
-QFN50P300X300X100-17N
-LM324QT-1
-Integrated Circuit
-0
-17
-17
-SamacSys_Parts
-QFN65P600X600X100-29N-D
-(ML) 28-Lead 6x6mm [QFN]
-Integrated Circuit
-0
-29
-29
-SamacSys_Parts
-SB0603WC01-RG
-
-
-0
-4
-4
-SamacSys_Parts
-SLW8645872ARAND
-SLW-864587-2A-RA-N-D-2
-Switch
-0
-5
-5
-SamacSys_Parts
-SOD3716X135N
-sod-123-ren1
-Diode
-0
-2
-2
-SamacSys_Parts
-SON50P200X200X80-9N
-W-Type 8L DFN 2x2 Packagess
-Integrated Circuit
-0
-9
-9
-SamacSys_Parts
-SON50P200X200X90-9N-D
-MIC23050-SYML-TR_11
-Integrated Circuit
-0
-9
-9
-SamacSys_Parts
-SOP65P600X115-15N
-PG-TSDSO-14
-Integrated Circuit
-0
-15
-15
-SamacSys_Parts
-SOT65P210X110-5N
-74AHCT1G32SE-7
-Undefined or Miscellaneous
-0
-5
-5
-SamacSys_Parts
-SOT95P270X145-5N
-(OT) [SOT-23]
-Integrated Circuit
-0
-5
-5
-SamacSys_Parts
-SOT96P240X110-3N
-SOT23_
-Integrated Circuit
-0
-3
-3
-SamacSys_Parts
-SOTFL50P160X60-6N
-DRL (R-PDSO-N6)-
-Integrated Circuit
-0
-6
-6
-SamacSys_Parts
-SSU121BRT
-SSU-121BRT-2
-Switch
-0
-5
-5
-SamacSys_Parts
-TC75S57FUTE85LF
-SSOP5-P-0.65A_2021
-Integrated Circuit
-0
-5
-5
-SamacSys_Parts
-Transducer
-
-
-0
-2
-2
-SamacSys_Parts
-USB4110GFA
-USB4110-GF-A-1
-Connector
-0
-20
-20
-SamacSys_Parts
-USBLC62P6
-USBLC6-2P6-3
-Integrated Circuit
-0
-6
-6
-SamacSys_Parts
-VCNT2020
-VCNT2020
-Integrated Circuit
-0
-4
-4
 Sensor
 ASAIR_AM2302_P2.54mm_Lead2.75mm_TabDown
 Temperature and humidity module, http://akizukidenshi.com/download/ds/aosong/AM2302.pdf
@@ -93246,41 +93036,76 @@ Varistor VF
 0
 2
 2
-footprints
-LSM_carrier
-
-
+minibot
+BGA4C40P2X2_85X85X60
+WLP package
+Integrated Circuit
 0
-18
-18
-footprints
-LSM_coil
-
-
+4
+4
+minibot
+EASV2010RWA0
+EASV2010RWA0-2
+LED
 0
-18
-18
-libraries
-1255AY100MP3
-
-
+4
+4
+minibot
+ESP32C3MINI1H4X
+13.2 mm x 16.6 mm x 2.4 mm
+Undefined or Miscellaneous
+0
+61
+61
+minibot
+EVPAWBD4A
+EVP-AWBD4A-2
+Switch
 0
 2
 2
-libraries
-MOLEX_105017-0001
+minibot
+GSB1C41110SSHR
+GSB1C41110SSHR-1
+Connector
+0
+16
+16
+minibot
+MODULE_ESP32-DEVKITC-32E
 
 
 0
-13
-13
-libraries
-MUB_v1
-
-
+38
+38
+minibot
+PCM12SMTR
+PCM12SMTR-1
+Switch
 0
-80
-80
+7
+7
+minibot
+SON50P200X200X80-9N
+WSON - 0.8 mm_2021
+Integrated Circuit
+0
+9
+9
+minibot
+SON50P200X200X90-9N-D
+MIC23050-SYML-TR_11
+Integrated Circuit
+0
+9
+9
+minibot
+SOTFL50P160X60-6N
+DRL (R-PDSO-N6)-
+Integrated Circuit
+0
+6
+6
 teensy.pretty-master
 Teensy1.0
 11

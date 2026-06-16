@@ -1,37 +1,35 @@
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 647:Plugin executed on: 'win32'
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 648:Plugin executed with python version: '3.9.16 (main, Oct 13 2023, 05:50:11) [MSC v.1936 64 bit (AMD64)]'
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 649:KiCad build version: 7.0.10
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 650:Plugin version: 2.1.3
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 651:Frame repr: <wx._core.Frame object at 0x0000025D9AC5E280>
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 121:getting a list of all footprints on board
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint U1 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint S2 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint S1 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint J1 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R8 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R7 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R6 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R5 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R4 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R3 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R2 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R1 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C4 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C3 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C2 on root level
-04-07 20:46:04 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C1 on root level
-04-07 20:46:05 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 86:By Sheet GUI initialized
-04-07 20:46:05 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 95:Selecting: 1
-04-07 20:46:05 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 99:Should invoke level_changed()
-04-07 20:46:05 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 277:Level_changed() invoked
-04-07 20:46:05 com_github_MitjaNemec_PlaceFootprints.place_footprints 244:constructing a list of sheets suitable for replication on level:'Coil Driver 0', file:'coildriver.kicad_sch'
-04-07 20:46:05 com_github_MitjaNemec_PlaceFootprints.place_footprints 279:suitable sheets are:[['Coil Driver 1'], ['Coil Driver 10'], ['Coil Driver 11'], ['Coil Driver 12'], ['Coil Driver 13'], ['Coil Driver 14'], ['Coil Driver 15'], ['Coil Driver 16'], ['Coil Driver 17'], ['Coil Driver 18'], ['Coil Driver 19'], ['Coil Driver 2'], ['Coil Driver 3'], ['Coil Driver 4'], ['Coil Driver 5'], ['Coil Driver 6'], ['Coil Driver 7'], ['Coil Driver 8'], ['Coil Driver 9']]
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 184:Saving config sheet
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 196:Preparing config for sheet linear
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 216:Saving config file
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 218:Saved the config file
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 718:Sheets selected: [['Coil Driver 1'], ['Coil Driver 10'], ['Coil Driver 11'], ['Coil Driver 12'], ['Coil Driver 13'], ['Coil Driver 14'], ['Coil Driver 15'], ['Coil Driver 16'], ['Coil Driver 17'], ['Coil Driver 18'], ['Coil Driver 19'], ['Coil Driver 2'], ['Coil Driver 3'], ['Coil Driver 4'], ['Coil Driver 5'], ['Coil Driver 6'], ['Coil Driver 7'], ['Coil Driver 8'], ['Coil Driver 9']]
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 727:Footprints to place: ['IC1', 'IC20', 'IC12', 'IC11', 'IC13', 'IC14', 'IC15', 'IC17', 'IC16', 'IC18', 'IC19', 'IC20', 'IC3', 'IC4', 'IC5', 'IC10', 'IC9', 'IC8', 'IC7', 'IC6']
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.place_footprints 367:Starting placing with linear layout
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 772:Placing complete
-04-07 20:46:11 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 773:Sorted_footprints: ['IC1', 'IC3', 'IC4', 'IC5', 'IC6', 'IC7', 'IC8', 'IC9', 'IC10', 'IC11', 'IC12', 'IC13', 'IC14', 'IC15', 'IC16', 'IC17', 'IC18', 'IC19', 'IC20', 'IC20']
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 647:Plugin executed on: 'win32'
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 648:Plugin executed with python version: '3.9.16 (main, Oct 13 2023, 05:50:11) [MSC v.1936 64 bit (AMD64)]'
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 649:KiCad build version: 7.0.10
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 650:Plugin version: 2.1.3
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 651:Frame repr: <wx._core.Frame object at 0x000001D906820280>
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 121:getting a list of all footprints on board
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C64 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R8 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R7 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R6 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R5 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R4 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R3 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C63 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint J1 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint U2 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R1 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C2 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint J2 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint U1 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint R2 on root level
+06-13 09:23:27 com_github_MitjaNemec_PlaceFootprints.place_footprints 156:Footprint C1 on root level
+06-13 09:23:28 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 830:Reference designator is: IC
+06-13 09:23:28 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 831:Reference number is: 21
+06-13 09:23:28 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 863:Sorted and filtered list:
+['IC21', 'IC22', 'IC23', 'IC24', 'IC25', 'IC26', 'IC27', 'IC28', 'IC29', 'IC30', 'IC31', 'IC32', 'IC33', 'IC34', 'IC35', 'IC36', 'IC37', 'IC38', 'IC39', 'IC40']
+06-13 09:23:28 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 359:wx.Colour(240, 240, 240, 255)
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 490:'0'
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 536:Preparing config for reference linear
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 556:Saving config file
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 558:Saved the config file
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 901:Footprints to place:
+['IC21', 'IC22', 'IC23', 'IC24', 'IC25', 'IC26', 'IC27', 'IC28', 'IC29', 'IC30', 'IC31', 'IC32', 'IC33', 'IC34', 'IC35', 'IC36', 'IC37', 'IC38', 'IC39', 'IC40']
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.place_footprints 367:Starting placing with linear layout
+06-13 09:23:32 com_github_MitjaNemec_PlaceFootprints.action_place_footprints 942:Placing complete

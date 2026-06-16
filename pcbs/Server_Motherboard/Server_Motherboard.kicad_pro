@@ -3,26 +3,171 @@
     "3dviewports": [],
     "design_settings": {
       "defaults": {
-        "board_outline_line_width": 0.1,
-        "copper_line_width": 0.2,
+        "board_outline_line_width": 0.09999999999999999,
+        "copper_line_width": 0.19999999999999998,
+        "copper_text_italic": false,
         "copper_text_size_h": 1.5,
         "copper_text_size_v": 1.5,
         "copper_text_thickness": 0.3,
+        "copper_text_upright": false,
+        "courtyard_line_width": 0.049999999999999996,
+        "dimension_precision": 4,
+        "dimension_units": 3,
+        "dimensions": {
+          "arrow_length": 1270000,
+          "extension_offset": 500000,
+          "keep_text_aligned": true,
+          "suppress_zeroes": false,
+          "text_position": 0,
+          "units_format": 1
+        },
+        "fab_line_width": 0.09999999999999999,
+        "fab_text_italic": false,
+        "fab_text_size_h": 1.0,
+        "fab_text_size_v": 1.0,
+        "fab_text_thickness": 0.15,
+        "fab_text_upright": false,
         "other_line_width": 0.15,
+        "other_text_italic": false,
+        "other_text_size_h": 1.0,
+        "other_text_size_v": 1.0,
+        "other_text_thickness": 0.15,
+        "other_text_upright": false,
+        "pads": {
+          "drill": 0.762,
+          "height": 1.524,
+          "width": 1.524
+        },
         "silk_line_width": 0.15,
+        "silk_text_italic": false,
         "silk_text_size_h": 1.0,
         "silk_text_size_v": 1.0,
-        "silk_text_thickness": 0.15
+        "silk_text_thickness": 0.15,
+        "silk_text_upright": false,
+        "zones": {
+          "min_clearance": 0.39999999999999997
+        }
       },
       "diff_pair_dimensions": [],
       "drc_exclusions": [],
-      "rules": {
-        "min_copper_edge_clearance": 0.0,
-        "solder_mask_clearance": 0.0,
-        "solder_mask_min_width": 0.0
+      "meta": {
+        "version": 2
       },
+      "rule_severities": {
+        "annular_width": "error",
+        "clearance": "error",
+        "connection_width": "warning",
+        "copper_edge_clearance": "error",
+        "copper_sliver": "warning",
+        "courtyards_overlap": "error",
+        "diff_pair_gap_out_of_range": "error",
+        "diff_pair_uncoupled_length_too_long": "error",
+        "drill_out_of_range": "error",
+        "duplicate_footprints": "warning",
+        "extra_footprint": "warning",
+        "footprint": "error",
+        "footprint_type_mismatch": "ignore",
+        "hole_clearance": "error",
+        "hole_near_hole": "error",
+        "invalid_outline": "error",
+        "isolated_copper": "warning",
+        "item_on_disabled_layer": "error",
+        "items_not_allowed": "error",
+        "length_out_of_range": "error",
+        "lib_footprint_issues": "warning",
+        "lib_footprint_mismatch": "warning",
+        "malformed_courtyard": "error",
+        "microvia_drill_out_of_range": "error",
+        "missing_courtyard": "ignore",
+        "missing_footprint": "warning",
+        "net_conflict": "warning",
+        "npth_inside_courtyard": "ignore",
+        "padstack": "warning",
+        "pth_inside_courtyard": "ignore",
+        "shorting_items": "error",
+        "silk_edge_clearance": "warning",
+        "silk_over_copper": "warning",
+        "silk_overlap": "warning",
+        "skew_out_of_range": "error",
+        "solder_mask_bridge": "error",
+        "starved_thermal": "error",
+        "text_height": "warning",
+        "text_thickness": "warning",
+        "through_hole_pad_without_hole": "error",
+        "too_many_vias": "error",
+        "track_dangling": "warning",
+        "track_width": "error",
+        "tracks_crossing": "error",
+        "unconnected_items": "error",
+        "unresolved_variable": "error",
+        "via_dangling": "warning",
+        "zones_intersect": "error"
+      },
+      "rules": {
+        "max_error": 0.005,
+        "min_clearance": 0.0,
+        "min_connection": 0.0,
+        "min_copper_edge_clearance": 0.0,
+        "min_hole_clearance": 0.25,
+        "min_hole_to_hole": 0.25,
+        "min_microvia_diameter": 0.19999999999999998,
+        "min_microvia_drill": 0.09999999999999999,
+        "min_resolved_spokes": 2,
+        "min_silk_clearance": 0.0,
+        "min_text_height": 0.7999999999999999,
+        "min_text_thickness": 0.08,
+        "min_through_hole_diameter": 0.3,
+        "min_track_width": 0.0,
+        "min_via_annular_width": 0.09999999999999999,
+        "min_via_diameter": 0.5,
+        "solder_mask_clearance": 0.0,
+        "solder_mask_min_width": 0.0,
+        "solder_mask_to_copper_clearance": 0.0,
+        "use_height_for_length_calcs": true
+      },
+      "teardrop_options": [
+        {
+          "td_allow_use_two_tracks": true,
+          "td_curve_segcount": 5,
+          "td_on_pad_in_zone": false,
+          "td_onpadsmd": true,
+          "td_onroundshapesonly": false,
+          "td_ontrackend": false,
+          "td_onviapad": true
+        }
+      ],
+      "teardrop_parameters": [
+        {
+          "td_curve_segcount": 0,
+          "td_height_ratio": 1.0,
+          "td_length_ratio": 0.5,
+          "td_maxheight": 2.0,
+          "td_maxlen": 1.0,
+          "td_target_name": "td_round_shape",
+          "td_width_to_size_filter_ratio": 0.9
+        },
+        {
+          "td_curve_segcount": 0,
+          "td_height_ratio": 1.0,
+          "td_length_ratio": 0.5,
+          "td_maxheight": 2.0,
+          "td_maxlen": 1.0,
+          "td_target_name": "td_rect_shape",
+          "td_width_to_size_filter_ratio": 0.9
+        },
+        {
+          "td_curve_segcount": 0,
+          "td_height_ratio": 1.0,
+          "td_length_ratio": 0.5,
+          "td_maxheight": 2.0,
+          "td_maxlen": 1.0,
+          "td_target_name": "td_track_end",
+          "td_width_to_size_filter_ratio": 0.9
+        }
+      ],
       "track_widths": [],
-      "via_dimensions": []
+      "via_dimensions": [],
+      "zones_allow_external_fillets": false
     },
     "layer_presets": [],
     "viewports": []
@@ -332,80 +477,84 @@
       "Coil Driver 0"
     ],
     [
-      "2aa04b8a-f0a1-47b4-8acc-520f91499fb2",
+      "4a11db7c-449f-4507-a1b7-90f501580680",
       "Coil Driver 1"
     ],
     [
-      "7cd12c83-096d-4eab-abc5-2cab319c960d",
+      "19df5c54-b76b-470d-a9e8-a3eb57b95735",
       "Coil Driver 2"
     ],
     [
-      "16d152aa-6752-4058-a594-71f6858d7676",
+      "a67a8641-f9dd-4a75-bdad-39afab0797fa",
       "Coil Driver 3"
     ],
     [
-      "1f7df130-c744-46f9-bc08-542b2a361b52",
+      "527c42c1-45a8-4546-a976-a4c2092a98b0",
       "Coil Driver 4"
     ],
     [
-      "dc2aeb7a-893c-4401-b3c6-fe386a1b3737",
-      "Coil Driver 9"
-    ],
-    [
-      "09d5a7a9-4ccd-484c-9747-cc68a89e8c6d",
-      "Coil Driver 8"
-    ],
-    [
-      "3d7857f0-7eb3-42a5-bad9-f5c6cf1547cc",
-      "Coil Driver 7"
-    ],
-    [
-      "4b1e1cd8-ab9d-4ac5-a781-b836fce76666",
-      "Coil Driver 6"
-    ],
-    [
-      "0f72cb7e-0634-4b34-9435-bc3d7b1640e9",
+      "1034f9e9-5cff-4dec-8543-d4aa40a76be2",
       "Coil Driver 5"
     ],
     [
-      "03e83c2e-be77-4fb7-91aa-98b6d0d60b43",
-      "Coil Driver 11"
+      "fe22d8fa-5d8a-431d-ad55-2593459c3be7",
+      "Coil Driver 6"
     ],
     [
-      "ee80dfdb-8764-43b3-bca9-98465931468c",
+      "450d92ae-8e92-4f0b-b142-2082756ad63d",
+      "Coil Driver 7"
+    ],
+    [
+      "3cf84df0-4fd5-425a-8d28-6eee34cdb9d3",
+      "Coil Driver 8"
+    ],
+    [
+      "11d1a4c1-82e8-4b8c-a890-853453dc0d68",
+      "Coil Driver 9"
+    ],
+    [
+      "68e9a288-8eb5-423b-a0b4-02f49cfa3138",
       "Coil Driver 10"
     ],
     [
-      "c9d03b21-a6af-4316-95de-a551cd3fe20d",
+      "4e6bb91a-4371-4c05-b440-2fac59e737cc",
+      "Coil Driver 11"
+    ],
+    [
+      "a321fdbc-4a21-4cc8-b87b-524096344247",
       "Coil Driver 12"
     ],
     [
-      "7e95d61f-a539-4076-8690-a54e6013456e",
+      "3e2813b1-f08a-4928-985f-3bb0f8f33d1e",
       "Coil Driver 13"
     ],
     [
-      "da6b912b-7a05-4739-ab4d-6e7ee2a2a82c",
+      "c8dfb1d1-3474-45c4-b46e-84d88182eb24",
       "Coil Driver 14"
     ],
     [
-      "2c89e4f4-3571-4740-9d9a-5772709d0b0a",
-      "Coil Driver 16"
-    ],
-    [
-      "c899bc34-1307-4e10-b096-bb0b8e665651",
+      "bcfe83e2-686a-4e59-880d-c2e7b08ed9dc",
       "Coil Driver 15"
     ],
     [
-      "548a3747-6319-4d26-9da8-bd3a85b12b55",
+      "3851fe37-9f7d-4f5d-8892-de52e51a4f1c",
+      "Coil Driver 16"
+    ],
+    [
+      "08ba1f53-7d87-4a2f-90e4-beee30d4b75f",
       "Coil Driver 17"
     ],
     [
-      "ce2f6766-4797-4dd7-bd8c-18a06bf75037",
+      "a0293ddc-31f9-4668-8306-f5700bded8ab",
       "Coil Driver 18"
     ],
     [
-      "8c78b852-c396-4950-92e1-86a76a87aa9b",
+      "ad57537b-c409-4e79-b6ef-2c75c7f04e61",
       "Coil Driver 19"
+    ],
+    [
+      "757bd66b-3ce7-4d2b-bfa1-385ff9e6af37",
+      "Solenoid Driver"
     ]
   ],
   "text_variables": {}
