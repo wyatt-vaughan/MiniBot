@@ -86,7 +86,7 @@ class PIECES:
         0x0F: ( 7*_S - _S//2,  1*_S - _S//2,   90),  # Knight g1
         0x10: ( 8*_S - _S//2,  1*_S - _S//2,   90),  # Rook h1
         # White extra queen — staged in left border (off-board)
-        0x11: (-40,             1*_S - _S//2,   90),
+        0x11: (9*_S - _S//2,  1*_S - _S//2,   90),
 
         # Black pawns  (IDs 0x12–0x19, row 7)
         0x12: ( 1*_S - _S//2,  7*_S - _S//2, 270),
@@ -107,7 +107,7 @@ class PIECES:
         0x20: ( 7*_S - _S//2,  8*_S - _S//2, 270),  # Knight g8
         0x21: ( 8*_S - _S//2,  8*_S - _S//2, 270),  # Rook h8
         # Black extra queen — staged in left border (off-board)
-        0x22: (-40,             8*_S - _S//2, 270),
+        0x22: ( 0*_S - _S//2,  8*_S - _S//2, 270),
     }
 
     GRAVEYARD_POSITIONS = {
@@ -265,10 +265,10 @@ class PLANNING:
     PLANNERS = {
         'Enhanced Conflict':  ('planning.enhanced_conflict_planner', 'EnhancedConflictPlanner'),
         'Direct (debug only)':('planning.direct_planner',            'DirectPlanner'),
-        'Wyatt Planner':  ('planning.wyatt_planner', 'WyattPlanner'),
+        
     }
 
-    DEFAULT_PLANNER        = 'Wyatt Planner'
+    DEFAULT_PLANNER        = 'Enhanced Conflict'
 
     # Move duration defaults
     DEFAULT_MOVE_DURATION_MS = 3000
