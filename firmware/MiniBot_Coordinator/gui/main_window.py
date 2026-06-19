@@ -626,16 +626,20 @@ class MainWindow(QMainWindow):
         def rankFileToMM(x):
             return x*PIECES._S - PIECES._S//2
                 
-        for piece in self._board.active_pieces():
+        for current_piece_index,  piece in enumerate(self._board.active_pieces()):
+            piece_found = False
             for index, (char, rank, file) in enumerate(piece_cords):
                 color = "black" if char.islower() else "white"
-                
-                if piece.rank[0] == char.lower() and piece.color == color:
+                piece_letter = piece.rank[0] if piece.rank != "knight" else "n"
+                if piece_letter == char.lower() and piece.color == color:
                     print(rank, file)
                     self._board.update_piece_position(piece.piece_id, rankFileToMM(file) + PIECES._S, rankFileToMM(rank), piece.orientation_deg, 0.0)
                     piece_cords.pop(index)
                     self._last_seen[piece.piece_id] = time.monotonic()
+                    piece_found = True
                     break
+            if not piece_found:
+                self._board.update_piece_position(piece.piece_id, PIECES.GRAVEYARD_POSITIONS[piece.piece_id][0], PIECES.GRAVEYARD_POSITIONS[piece.piece_id][1], piece.orientation_deg, 0.0)
                     
                
                     
