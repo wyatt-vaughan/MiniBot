@@ -144,6 +144,7 @@ class DebugTab(QWidget):
         sl.addWidget(self._btn_randomize)
         
         self._fen_input = QTextEdit('rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1')
+        self._fen_input.setFixedHeight(30)
         sl.addWidget(self._fen_input)
         
         self._btn_fen_set = QPushButton('Set FEN to Board')
