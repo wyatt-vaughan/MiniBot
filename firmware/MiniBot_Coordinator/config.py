@@ -221,9 +221,10 @@ class PLANNING:
     PLANNERS = {
         'Enhanced Conflict':  ('planning.enhanced_conflict_planner', 'EnhancedConflictPlanner'),
         'Direct (debug only)':('planning.direct_planner',            'DirectPlanner'),
+        'Wyatt Planner':  ('planning.wyatt_planner', 'WyattPlanner'),
     }
 
-    DEFAULT_PLANNER        = 'Enhanced Conflict'
+    DEFAULT_PLANNER        = 'Wyatt Planner'
 
     # Move duration defaults
     DEFAULT_MOVE_DURATION_MS = 3000
