@@ -26,3 +26,7 @@ dist/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+.gitignore
+
+ignore_for_now/
