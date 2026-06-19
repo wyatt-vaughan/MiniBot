@@ -7,6 +7,8 @@ Path Planning tab:
   - Target X / Y inputs
   - "Plan Move" button  — runs the selected algorithm, populates move queue
   - "Return All Home"   — plans home moves for all pieces
+  - "Return All to Graveyard" — plans moves to graveyard for all pieces
+  - FEN input + "Set FEN to Board" button — set piece positions from FEN string
   - Move queue list
   - "Send Commands" button — dispatches queued moves to serial handler
 """
@@ -384,7 +386,7 @@ class PathPlanningTab(QWidget):
         def rankFileToMM(x):
             return x*PIECES._S - PIECES._S//2
                 
-        for current_piece_index,  piece in enumerate(self._board.active_pieces()):
+        for   piece in (self._board.active_pieces()):
             piece_found = False
             for index, (char, rank, file) in enumerate(piece_cords):
                 color = "black" if char.islower() else "white"
