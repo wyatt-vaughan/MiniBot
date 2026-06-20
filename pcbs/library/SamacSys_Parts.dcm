@@ -174,4 +174,16 @@ K
 F https://www.ti.com/lit/ds/symlink/drv8210.pdf?ts=1641207817417&ref_url=https%253A%252F%252Fwww.google.com%252F
 $ENDCMP
 #
+$CMP DRV8210DSGR
+D H-Bridge Motor Driver T/R
+K
+F https://www.ti.com/lit/ds/symlink/drv8210.pdf?ts=1614758859747&ref_url=https%253A%252F%252Fwww.mouser.in%252F
+$ENDCMP
+#
+$CMP USB4180-03-0120-C
+D Global Connector Technology (GCT) USB-C Plug, Vert, H11mm, SMT, No Latches, 6pin, 1.2mm stakes
+K
+F https://gct.co/connector/usb4180#
+$ENDCMP
+#
 #End Doc Library
