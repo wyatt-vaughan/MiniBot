@@ -40,31 +40,31 @@ void KinematicsController_Task(void* pvParameters) {
     MotorTestRequest motor_test_buffer;
 
     // debug cmds
-    MotionCommand cmd0 = {175.0f, 175.0f, 0.0f,   700.0f};
-    MotionCommand cmd1 = {225.0f, 175.0f, 0.0f,   1000.0f};
-    MotionCommand cmd2 = {225.0f, 175.0f, 1.571f, 700.0f};
-    MotionCommand cmd3 = {225.0f, 225.0f, 1.571f, 1000.0f};
-    MotionCommand cmd4 = {225.0f, 225.0f, 0.0f,   700.0f};
-    MotionCommand cmd5 = {175.0f, 225.0f, 0.0f,   1000.0f};
-    MotionCommand cmd6 = {175.0f, 225.0f, 1.571f, 700.0f};
-    MotionCommand cmd7 = {175.0f, 175.0f, 1.571f, 1000.0f};
+    // MotionCommand cmd0 = {75.0f, 75.0f, 0.0f,   700.0f};
+    // MotionCommand cmd1 = {225.0f, 75.0f, 0.0f,   1000.0f};
+    // MotionCommand cmd2 = {225.0f, 75.0f, 1.571f, 700.0f};
+    // MotionCommand cmd3 = {225.0f, 225.0f, 1.571f, 1000.0f};
+    // MotionCommand cmd4 = {225.0f, 225.0f, 0.0f,   700.0f};
+    // MotionCommand cmd5 = {75.0f, 225.0f, 0.0f,   1000.0f};
+    // MotionCommand cmd6 = {75.0f, 225.0f, 1.571f, 700.0f};
+    // MotionCommand cmd7 = {75.0f, 75.0f, 1.571f, 1000.0f};
 
     // debug loop
-    vTaskDelay(pdMS_TO_TICKS(3000));
-    while (1) {
-        robot->setTargetPose(cmd0);
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        robot->setTargetPose(cmd1);
-        robot->setTargetPose(cmd2);
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        robot->setTargetPose(cmd3);
-        robot->setTargetPose(cmd4);
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        robot->setTargetPose(cmd5);
-        robot->setTargetPose(cmd6);
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        robot->setTargetPose(cmd7);
-    }
+    // vTaskDelay(pdMS_TO_TICKS(3000));
+    // while (1) {
+    //     robot->setTargetPose(cmd0);
+    //     vTaskDelay(pdMS_TO_TICKS(5000));
+    //     robot->setTargetPose(cmd1);
+    //     robot->setTargetPose(cmd2);
+    //     vTaskDelay(pdMS_TO_TICKS(5000));
+    //     robot->setTargetPose(cmd3);
+    //     robot->setTargetPose(cmd4);
+    //     vTaskDelay(pdMS_TO_TICKS(5000));
+    //     robot->setTargetPose(cmd5);
+    //     robot->setTargetPose(cmd6);
+    //     vTaskDelay(pdMS_TO_TICKS(5000));
+    //     robot->setTargetPose(cmd7);
+    // }
     
 
     while (1) {

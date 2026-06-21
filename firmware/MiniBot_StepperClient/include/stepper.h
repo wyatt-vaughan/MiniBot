@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-#include "driver/gptimer.h"
+#include "esp_timer.h"
 
 class StepperDriver {
 public:
@@ -24,6 +24,10 @@ private:
     bool timer_initialized = false;
     uint32_t step_interval_us = 0;
     int64_t timer_start_time_us = 0;
+    uint32_t timer_steps_target = 0;
+    uint32_t timer_steps_taken = 0;
+
+    esp_timer_handle_t s_step_timer = NULL;
     
 public:
     /**
@@ -80,51 +84,37 @@ public:
 
     /**
      * Generate a single step pulse from an ISR context.
+     */
+    static void stepISR(void* arg);
+
+    /**
+     * Initialize the step timer. Must be called before configureTimer or startTimer.
      * @return true on success, false on failure
      */
-    bool stepISR();
+    bool initTimer();
 
     /**
-    * Set the RMT channel for this stepper (for control at constant velocity)
-    * @param incoming_rmt_channel RMT channel to use for stepping
-    * @return true on success, false on failure
-    */
-    bool setRMTchannel(rmt_channel_t incoming_rmt_channel);
-
-    /**
-     * Configure RMT for a specific velocity
+     * Configure timer for a specific velocity
      * @param velocity_rad_s Desired velocity in rad/s (used to calculate step interval)
      * @param steps_per_rad Steps per radian for the wheel (used to calculate step interval)
+     * @param steps_to_take Total steps to take before stopping timer (0 for continuous)
      * @return true on success, false on failure
      */
-    bool configureRMT(float velocity_rad_s, float steps_per_rad);
+    bool configureTimer(float velocity_rad_s, float steps_per_rad, int steps_to_take);
 
     /**
-     * Start RMT transmission for continuous stepping
-     * @return true on success, false on failure
+     * Start timer for continuous stepping
+     * @return true on success, false if not initialize or already running
      */
-    bool startRMT();
+    bool startTimer();
 
     /**
-     * Stop RMT transmission
-     * @param steps_out Optional pointer to receive estimated step count since startRMT()
-     * @return true on success, false on failure
+     * Stop timer
+     * @return true on success, false if not initialized (but then how did it start????)
      */
-    bool stopRMT(int* steps_out = nullptr);
+    bool stopTimer();
 
-    /**
-     * Detach step pin from RMT peripheral so manual step() calls work.
-     * Must be called before using step() when RMT has been initialized.
-     */
-    void detachStepFromRMT();
-
-    /**
-     * Re-attach step pin to RMT output after manual stepping.
-     * Must be called before using startRMT().
-     */
-    void attachStepToRMT();
-
-    bool getRMTRunning() const { return rmt_running; }
+    bool isTimerRunning() const { return timer_running; }
 
 };
 

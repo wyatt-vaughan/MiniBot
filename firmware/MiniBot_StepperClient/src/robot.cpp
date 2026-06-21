@@ -24,9 +24,6 @@ bool Robot::initialize() {
     left_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     right_wheel.setMicrostepping(MSET_STEP_LVL, MSET_DIR_LVL);
     left_wheel.resetDriver();  // only one reset needed, reset pin is shared
-
-    left_wheel.setRMTchannel(RMT_CHANNEL_0);
-    right_wheel.setRMTchannel(RMT_CHANNEL_1);
     
     wheel_radius_mm = WHEEL_RADIUS_MM;
     wheel_spacing_mm = WHEEL_SPACING_MM;
@@ -469,7 +466,7 @@ void Robot::setTargetPose(MotionCommand target) {
 }
 
 // ============================================================================
-// Shared Accel / Cruise(RMT) / Decel Step Loop
+// Shared Accel / Cruise(hw timer) / Decel Step Loop
 // Drives left_wheel and right_wheel synchronously through a single WheelMotion profile.
 // Both wheels must have direction set before calling.
 // ============================================================================
@@ -492,16 +489,12 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
     if (cruise_steps != 0) {
         float vel_rad_s = v_max / wheel_radius_mm;
         float steps_per_rad_val = steps_per_revolution / (2.0f * M_PI);
-        left_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
-        right_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
+        left_wheel.configureTimer(vel_rad_s, steps_per_rad_val, cruise_steps);
+        right_wheel.configureTimer(vel_rad_s, steps_per_rad_val, cruise_steps);
     }
 
-    Serial.printf("step_dist=%.3f mm, accel_steps=%ld, cruise_steps=%ld, decel_steps=%ld\n", 
+    ESP_LOGI(TAG, "step_dist=%.3f mm, accel_steps=%ld, cruise_steps=%ld, decel_steps=%ld\n", 
                   step_distance_mm, accel_steps, cruise_steps, decel_steps);
-
-    // Detach step pins from RMT so manual step() calls work during accel/decel
-    left_wheel.detachStepFromRMT();
-    right_wheel.detachStepFromRMT();
 
     while (steps_done < profile.total_steps) {
         if (phase == 0 && steps_done >= accel_steps) {
@@ -524,33 +517,22 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
             }
 
             case 1: {
-                // Cruise: RMT handles pulsing; wait for cruise window then stop
-                // Re-attach to RMT before handing off to the peripheral
-                left_wheel.attachStepToRMT();
-                right_wheel.attachStepToRMT();
-                left_wheel.startRMT();
-                right_wheel.startRMT();
+                // Cruise: Start timers and wait for cruise to complete
+                left_wheel.startTimer();
+                right_wheel.startTimer();
                 ESP_LOGD(TAG, "  Cruise phase started at step %ld, target velocity %.1f mm/s", steps_done, v_max);
 
-                int64_t cruise_end_us = start_us + (int64_t)((profile.accel_time_s + profile.cruise_time_s) * 1e6f);
+                // Wait until close to end of cruise phase
+                int64_t cruise_end_us = start_us + (int64_t)((profile.accel_time_s + profile.cruise_time_s) * 1e6f) - 500;
                 if (!preciseWaitUntil(cruise_end_us)) {
                     ESP_LOGW(TAG, "  Cruise phase timing missed");
                 }
 
-                int left_cruise_actual = 0, right_cruise_actual = 0;
-                left_wheel.stopRMT(&left_cruise_actual);
-                right_wheel.stopRMT(&right_cruise_actual);
-                // Detach again so decel manual step() calls work
-                left_wheel.detachStepFromRMT();
-                right_wheel.detachStepFromRMT();
-                ESP_LOGD(TAG, "  Cruise phase ended at step %ld, actual cruise steps: L=%d, R=%d", 
-                           steps_done, left_cruise_actual, right_cruise_actual);
-
-                if (abs(left_cruise_actual - cruise_steps) > 2) {
-                    ESP_LOGW(TAG, "  Cruise L step mismatch: expected %ld got %d", cruise_steps, left_cruise_actual);
-                }
-                if (abs(right_cruise_actual - cruise_steps) > 2) {
-                    ESP_LOGW(TAG, "  Cruise R step mismatch: expected %ld got %d", cruise_steps, right_cruise_actual);
+                // Then busywait until both timers have completed, 2ms timeout
+                while (esp_timer_get_time() < cruise_end_us + 2000) {
+                    if (!left_wheel.isTimerRunning() && !right_wheel.isTimerRunning()) {
+                        break;
+                    }
                 }
 
                 steps_done += cruise_steps;
@@ -581,10 +563,6 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
             steps_done++;
         }
     }
-
-    // Re-attach step pins to RMT, leaving system ready for subsequent RMT use
-    left_wheel.attachStepToRMT();
-    right_wheel.attachStepToRMT();
 }
 
 // ============================================================================
@@ -879,44 +857,57 @@ void Robot::setMotorTestVelocity(float m0_velocity_rad_s, float m1_velocity_rad_
     
     float steps_per_rad = steps_per_revolution / (2.0f * M_PI);
     
-    // M0 setup with RMT
+    // M0 setup
     float m0_abs_vel = fabs(m0_velocity_rad_s);
     if (m0_abs_vel > 0.001f) {
         left_wheel.setDirection(m0_velocity_rad_s >= 0.0f);
 
-        if (!left_wheel.configureRMT(m0_abs_vel, steps_per_rad)) {
-            ESP_LOGE(TAG, "RMT M0 configure failed");
+        if (!left_wheel.configureTimer(m0_abs_vel, steps_per_rad, 0)) {
+            ESP_LOGE(TAG, "M0 timer configure failed");
             return;
         }
 
-        if (!left_wheel.startRMT()) {
-            ESP_LOGE(TAG, "RMT M0 start failed");
+        if (left_wheel.isTimerRunning()) {
+            if (!left_wheel.stopTimer()){
+                ESP_LOGE(TAG, "M0 timer stop failed");
+                return;
+            }
+        }
+        if (!left_wheel.startTimer()) {
+            ESP_LOGE(TAG, "M0 timer start failed");
             return;
         }
-    } else if (left_wheel.getRMTRunning()) {
-        if (!left_wheel.stopRMT()){
-            ESP_LOGE(TAG, "RMT M0 stop failed");
+    } else if (left_wheel.isTimerRunning()) {
+        if (!left_wheel.stopTimer()){
+            ESP_LOGE(TAG, "M0 timer stop failed");
             return;
         }
     }
     
-    // M1 setup with RMT
+    // M1 setup
     float m1_abs_vel = fabs(m1_velocity_rad_s);
     if (m1_abs_vel > 0.001f) {
         right_wheel.setDirection(m1_velocity_rad_s >= 0.0f);
 
-        if (!right_wheel.configureRMT(m1_abs_vel, steps_per_rad)) {
-            ESP_LOGE(TAG, "RMT M1 configure failed");
+        if (!right_wheel.configureTimer(m1_abs_vel, steps_per_rad, 0)) {
+            ESP_LOGE(TAG, "M1 timer configure failed");
             return;
         }
 
-        if (!right_wheel.startRMT()) {
-            ESP_LOGE(TAG, "RMT M1 start failed");
+        if (right_wheel.isTimerRunning()) {
+            if (!right_wheel.stopTimer()){
+                ESP_LOGE(TAG, "M1 timer stop failed");
+                return;
+            }
+        }
+
+        if (!right_wheel.startTimer()) {
+            ESP_LOGE(TAG, "M1 timer start failed");
             return;
         }
-    } else if (right_wheel.getRMTRunning()) {
-        if (!right_wheel.stopRMT()){
-            ESP_LOGE(TAG, "RMT M1 stop failed");
+    } else if (right_wheel.isTimerRunning()) {
+        if (!right_wheel.stopTimer()){
+            ESP_LOGE(TAG, "M1 timer stop failed");
             return;
         }
     }
@@ -929,25 +920,21 @@ void Robot::stopMotorTest() {
     current_m0_velocity_rad_s = 0.0f;
     current_m1_velocity_rad_s = 0.0f;
     
-    if (left_wheel.getRMTRunning()) {
-        if (!left_wheel.stopRMT()){
-            ESP_LOGE(TAG, "RMT M0 stop failed");
+    if (left_wheel.isTimerRunning()) {
+        if (!left_wheel.stopTimer()){
+            ESP_LOGE(TAG, "M0 timer stop failed");
             return;
         }
     }
-    if (right_wheel.getRMTRunning()) {
-        if (!right_wheel.stopRMT()){
-            ESP_LOGE(TAG, "RMT M1 stop failed");
+    if (right_wheel.isTimerRunning()) {
+        if (!right_wheel.stopTimer()){
+            ESP_LOGE(TAG, "M1 timer stop failed");
             return;
         }
     }
     
     left_wheel.disable();
     right_wheel.disable();
-}
-
-void Robot::updateMotorTest(uint32_t dt_us) {
-    // No-op: timers handle stepping automatically
 }
 
 void Robot::setBatteryVoltage(float voltage) {
