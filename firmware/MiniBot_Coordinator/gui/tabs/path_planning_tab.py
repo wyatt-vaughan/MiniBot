@@ -357,7 +357,7 @@ class PathPlanningTab(QWidget):
         _fen_string = self._fen_input.toPlainText().strip()
         valid_fen, error = self.validate_fen(_fen_string)
         if not valid_fen:
-            self._log.append(error)
+            self.planning_log.emit(error)
             return
         
         fen_positions = _fen_string.split(" ")[0]
