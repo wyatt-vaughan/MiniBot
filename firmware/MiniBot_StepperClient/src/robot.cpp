@@ -493,7 +493,7 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
         right_wheel.configureTimer(vel_rad_s, steps_per_rad_val, cruise_steps);
     }
 
-    ESP_LOGI(TAG, "step_dist=%.3f mm, accel_steps=%ld, cruise_steps=%ld, decel_steps=%ld\n", 
+    ESP_LOGD(TAG, "step_dist=%.3f mm, accel_steps=%ld, cruise_steps=%ld, decel_steps=%ld\n", 
                   step_distance_mm, accel_steps, cruise_steps, decel_steps);
 
     while (steps_done < profile.total_steps) {
@@ -531,6 +531,7 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
                 // Then busywait until both timers have completed, 2ms timeout
                 while (esp_timer_get_time() < cruise_end_us + 2000) {
                     if (!left_wheel.isTimerRunning() && !right_wheel.isTimerRunning()) {
+                        ESP_LOGD(TAG, "  Cruise phase timer completed");
                         break;
                     }
                 }
