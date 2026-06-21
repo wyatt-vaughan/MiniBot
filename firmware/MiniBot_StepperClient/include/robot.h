@@ -11,6 +11,7 @@
 #include <functional>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <driver/timer.h>
 
 enum class MotionType {
     NONE,
@@ -239,7 +240,7 @@ private:
                            TickType_t start_tick, TickType_t target_end_tick,
                            std::function<void(int32_t)> step_callback);
     
-    // Shared accel/cruise(RMT)/decel step loop for synchronized wheel pairs
+    // Shared accel/cruise/timer/decel step loop for synchronized wheel pairs
     void executeStepLoop(const WheelMotion& profile, float steps_per_mm);
 
     // New motion execution methods
