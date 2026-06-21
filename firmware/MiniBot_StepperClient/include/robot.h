@@ -11,6 +11,7 @@
 #include <functional>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <driver/timer.h>
 
 enum class MotionType {
     NONE,
@@ -81,6 +82,13 @@ private:
     float max_rot_vel_rad_s;
     float max_rot_accel_rad_s2;
     float stepper_max_velocity_mm_s;
+
+    timer_group_t cruise_timer_group = TIMER_GROUP_0;
+    timer_idx_t cruise_timer_idx = TIMER_0;
+    float cruise_step_interval_us = 0.0f;
+    volatile int32_t cruise_steps_target = 0;
+    volatile int32_t cruise_steps_done = 0;
+    volatile bool cruise_timer_active = false;
 
 public:
     StepperDriver left_wheel;
@@ -239,8 +247,13 @@ private:
                            TickType_t start_tick, TickType_t target_end_tick,
                            std::function<void(int32_t)> step_callback);
     
-    // Shared accel/cruise(RMT)/decel step loop for synchronized wheel pairs
+    // Shared accel/cruise/timer/decel step loop for synchronized wheel pairs
     void executeStepLoop(const WheelMotion& profile, float steps_per_mm);
+
+    bool initializeCruiseTimer();
+    bool startCruiseTimer(float step_interval_us, int32_t cruise_steps);
+    void stopCruiseTimer();
+    static bool IRAM_ATTR cruiseTimerISR(void* arg);
 
     // New motion execution methods
     void executeRotation(float angle_rad, float target_time_s);

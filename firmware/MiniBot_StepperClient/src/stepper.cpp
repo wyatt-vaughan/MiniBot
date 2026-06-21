@@ -79,101 +79,48 @@ bool StepperDriver::step() {
     return true;
 }
 
-bool StepperDriver::setRMTchannel(rmt_channel_t incoming_rmt_channel) {
-    rmt_channel = incoming_rmt_channel;
-
-    // Configure RMT channel
-    rmt_config_t rmt_cfg = {};
-    rmt_cfg.channel = rmt_channel;
-    rmt_cfg.gpio_num = (gpio_num_t)step_pin;
-    rmt_cfg.clk_div = 80;  // 80MHz / 80 = 1MHz = 1us per tick
-    rmt_cfg.mem_block_num = 1;
-    rmt_cfg.tx_config.loop_en = true;
-    
-    esp_err_t err = rmt_config(&rmt_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "RMT config failed: %d", err);
-        return false;
-    }
-
-    err = rmt_driver_install(rmt_channel, 0, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "RMT driver install failed: %d", err);
-        return false;
-    }
-    rmt_initialized = true;
-    return true;
+bool StepperDriver::stepISR() {
+    return step();
 }
 
-bool StepperDriver::configureRMT(float velocity_rad_s, float steps_per_rad) {
-    if (!rmt_initialized) {
-        ESP_LOGE(TAG, "RMT channel not initialized. Set channel first.");
+
+bool StepperDriver::configureTimer(float velocity_rad_s, float steps_per_rad) {
+    if (!timer_initialized) {
+        ESP_LOGE(TAG, "Timer not initialized. Set timer first.");
         return false;
     }
 
-    // Calculate step interval in microseconds (capped at max RMT duration ~32.7ms)
+    // Calculate step interval in microseconds
     step_interval_us = (uint32_t)fmax(1, (uint32_t)round(1000000.0f / (velocity_rad_s * steps_per_rad)));
-    step_interval_us = fmin(step_interval_us, 32000);  // Cap at RMT max duration
+    step_interval_us = fmin(step_interval_us, 100000);  // Cap at 100ms to avoid shenanigans
 
     // Stop any existing transmission
-    if (rmt_running) {
-        stopRMT();
+    if (timer_running) {
+        stopTimer();
     }
     
-    // Create pulse: HIGH for 1us, LOW for (interval-1) us
-    rmt_item32_t pulse = {};
-    pulse.level0 = 1;
-    pulse.duration0 = 1;  // 1us high
-    pulse.level1 = 0;
-    pulse.duration1 = fmax(1, step_interval_us - 1);  // Low for rest of interval
+    gptimer_handle_t gptimer = NULL;
+    gptimer_config_t timer_config = {
+    .clk_src = GPTIMER_CLK_SRC_DEFAULT, // Select the default clock source
+    .direction = GPTIMER_COUNT_UP,      // Counting direction is up
+    .resolution_hz = 1 * 1000 * 1000,   // Resolution is 1 MHz, i.e., 1 tick equals 1 microsecond
+};
     
     esp_err_t err = rmt_write_items(rmt_channel, &pulse, 1, false);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "RMT write_items failed: %d", err);
+        ESP_LOGE(TAG, "Timer config failed: %d", err);
         return false;
     }
     return true;
 }
 
-bool StepperDriver::startRMT() {
-    esp_err_t err = rmt_tx_start(rmt_channel, true);
-    if (err != ESP_OK) {
-        return false;
-    }
-    rmt_start_time_us = esp_timer_get_time();
-    rmt_running = true;
-    return true;
-}
-
-bool StepperDriver::stopRMT(int* steps_out) {
-    esp_err_t err = rmt_tx_stop(rmt_channel);
-    if (err != ESP_OK) {
-        return false;
-    }
-    int64_t elapsed_us = esp_timer_get_time() - rmt_start_time_us;
-    int64_t steps_taken = (step_interval_us > 0) ? (elapsed_us / step_interval_us) : 0;
-    current_step_count += steps_taken * current_direction;
-
-    if (steps_out != nullptr) {
-        *steps_out = (int)steps_taken;
-    }
-
-    rmt_running = false;
-    rmt_start_time_us = 0;
-    return true;
-}
-
-void StepperDriver::detachStepFromRMT() {
-    if (!rmt_initialized) return;
+void StepperDriver::startTimer() {
+    if (!timer_initialized) return;
     // Disconnect step pin from RMT and reclaim as a plain GPIO output
-    gpio_reset_pin((gpio_num_t)step_pin);
-    gpio_set_direction((gpio_num_t)step_pin, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)step_pin, 0);
+
 }
 
-void StepperDriver::attachStepToRMT() {
-    if (!rmt_initialized) return;
-    // Re-route step pin through the RMT TX output signal
-    gpio_set_direction((gpio_num_t)step_pin, GPIO_MODE_INPUT_OUTPUT);
-    rmt_set_gpio(rmt_channel, RMT_MODE_TX, (gpio_num_t)step_pin, false);
+void StepperDriver::stopTimer() {
+    if (!timer_initialized) return;
+
 }

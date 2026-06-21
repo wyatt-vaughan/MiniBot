@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <stdint.h>
-#include <driver/rmt.h>
+#include "driver/gptimer.h"
 
 class StepperDriver {
 public:
@@ -17,14 +17,13 @@ private:
     // State
     bool enabled;
     int8_t current_direction;  // 1 for forward, -1 for reverse
-    int32_t current_step_count;
+    volatile int32_t current_step_count;
 
     bool reverse_motor;  // If true, reverses the direction signal
-    bool rmt_running = false;
-    bool rmt_initialized = false;
+    bool timer_running = false;
+    bool timer_initialized = false;
     uint32_t step_interval_us = 0;
-    int64_t rmt_start_time_us = 0;
-    rmt_channel_t rmt_channel;
+    int64_t timer_start_time_us = 0;
     
 public:
     /**
@@ -78,6 +77,12 @@ public:
      * @return true on success, false on failure
      */
     bool step();
+
+    /**
+     * Generate a single step pulse from an ISR context.
+     * @return true on success, false on failure
+     */
+    bool stepISR();
 
     /**
     * Set the RMT channel for this stepper (for control at constant velocity)

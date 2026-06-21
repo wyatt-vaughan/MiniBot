@@ -1,7 +1,6 @@
 #include "robot.h"
 #include <Arduino.h>
 #include <cmath>
-#include <driver/rmt.h>
 #undef LOG_LOCAL_LEVEL
 #define LOG_LOCAL_LEVEL LOG_LEVEL_ROBOT
 #include "esp_log.h"
@@ -496,6 +495,9 @@ void Robot::executeStepLoop(const WheelMotion& profile, float steps_per_mm) {
         left_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
         right_wheel.configureRMT(vel_rad_s, steps_per_rad_val);
     }
+
+    Serial.printf("step_dist=%.3f mm, accel_steps=%ld, cruise_steps=%ld, decel_steps=%ld\n", 
+                  step_distance_mm, accel_steps, cruise_steps, decel_steps);
 
     // Detach step pins from RMT so manual step() calls work during accel/decel
     left_wheel.detachStepFromRMT();

@@ -50,21 +50,21 @@ void KinematicsController_Task(void* pvParameters) {
     MotionCommand cmd7 = {175.0f, 175.0f, 1.571f, 1000.0f};
 
     // debug loop
-    // vTaskDelay(pdMS_TO_TICKS(3000));
-    // while (1) {
-    //     robot->setTargetPose(cmd0);
-    //     vTaskDelay(pdMS_TO_TICKS(3000));
-    //     robot->setTargetPose(cmd1);
-    //     robot->setTargetPose(cmd2);
-    //     vTaskDelay(pdMS_TO_TICKS(3000));
-    //     robot->setTargetPose(cmd3);
-    //     robot->setTargetPose(cmd4);
-    //     vTaskDelay(pdMS_TO_TICKS(3000));
-    //     robot->setTargetPose(cmd5);
-    //     robot->setTargetPose(cmd6);
-    //     vTaskDelay(pdMS_TO_TICKS(3000));
-    //     robot->setTargetPose(cmd7);
-    // }
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    while (1) {
+        robot->setTargetPose(cmd0);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        robot->setTargetPose(cmd1);
+        robot->setTargetPose(cmd2);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        robot->setTargetPose(cmd3);
+        robot->setTargetPose(cmd4);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        robot->setTargetPose(cmd5);
+        robot->setTargetPose(cmd6);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        robot->setTargetPose(cmd7);
+    }
     
 
     while (1) {
