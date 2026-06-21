@@ -124,10 +124,10 @@
 
 // Electromagnet positions (x, y) in mm relative to the platform origin
 // Add one entry per electromagnet; array length must match EMAG_COUNT
-#define EMAG_POSITIONS_MM  {
-    {250.0f, 156.7f},
-    {150.0f, 156.7f},
-    {200.0f, 243.3f}
+#define EMAG_POSITIONS_MM  { \
+    {250.0f, 156.7f}, \
+    {150.0f, 156.7f}, \
+    {200.0f, 243.3f} \
 }
 
 // Electromagnet frame timing setup

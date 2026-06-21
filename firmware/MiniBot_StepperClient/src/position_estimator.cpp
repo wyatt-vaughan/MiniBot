@@ -615,16 +615,6 @@ void PositionEstimator_CalcTask(void* pvParameters) {
 
     EmagFrameData frame;
 
-    // debug test loop
-    // while (1) {
-    //     // Generate a random position centered around 200,200 with some noise and inject into robot for testing
-    //     float test_x = 200.0f + random(-10, 11);
-    //     float test_y = 200.0f + random(-10, 11);
-    //     float test_theta = random(-50, 51) / 100.0f;
-    //     robot->setTruePose(test_x, test_y, test_theta, 1.0f);
-    //     vTaskDelay(pdMS_TO_TICKS(100));
-    // }
-
     while (1) {
         if (xQueueReceive(emag_frame_queue, &frame, portMAX_DELAY) == pdTRUE) {
             ESP_LOGD(TAG, "================ NEW EMAG FRAME RECEIVED ================");
