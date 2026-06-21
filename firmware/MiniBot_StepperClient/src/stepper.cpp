@@ -27,6 +27,8 @@ bool StepperDriver::initialize(uint8_t step, uint8_t dir, uint8_t enable, uint8_
     digitalWrite(step_pin, LOW);
     digitalWrite(dir_pin, LOW);
 
+    initTimer();
+
     return true;
 }
 
@@ -79,101 +81,61 @@ bool StepperDriver::step() {
     return true;
 }
 
-bool StepperDriver::setRMTchannel(rmt_channel_t incoming_rmt_channel) {
-    rmt_channel = incoming_rmt_channel;
+void StepperDriver::stepISR(void* arg) {
+    StepperDriver* instance = (StepperDriver*)arg;
+    instance->step();
+    instance->timer_steps_taken++;
+    if(instance->timer_steps_taken >= instance->timer_steps_target && instance->timer_steps_target > 0) {
+        instance->stopTimer();
+    }
+}
 
-    // Configure RMT channel
-    rmt_config_t rmt_cfg = {};
-    rmt_cfg.channel = rmt_channel;
-    rmt_cfg.gpio_num = (gpio_num_t)step_pin;
-    rmt_cfg.clk_div = 80;  // 80MHz / 80 = 1MHz = 1us per tick
-    rmt_cfg.mem_block_num = 1;
-    rmt_cfg.tx_config.loop_en = true;
-    
-    esp_err_t err = rmt_config(&rmt_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "RMT config failed: %d", err);
+bool StepperDriver::initTimer() {
+    esp_timer_create_args_t timer_args = {
+        .callback = stepISR,
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "stepper_timer",
+    };
+
+    if (esp_timer_create(&timer_args, &this->s_step_timer) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create stepper timer");
         return false;
     }
-
-    err = rmt_driver_install(rmt_channel, 0, 0);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "RMT driver install failed: %d", err);
-        return false;
-    }
-    rmt_initialized = true;
+    timer_initialized = true;
     return true;
 }
 
-bool StepperDriver::configureRMT(float velocity_rad_s, float steps_per_rad) {
-    if (!rmt_initialized) {
-        ESP_LOGE(TAG, "RMT channel not initialized. Set channel first.");
+
+bool StepperDriver::configureTimer(float velocity_rad_s, float steps_per_rad, int steps_to_take) {
+    if (!timer_initialized) {
+        ESP_LOGE(TAG, "Timer not initialized. Set timer first.");
         return false;
     }
 
-    // Calculate step interval in microseconds (capped at max RMT duration ~32.7ms)
-    step_interval_us = (uint32_t)fmax(1, (uint32_t)round(1000000.0f / (velocity_rad_s * steps_per_rad)));
-    step_interval_us = fmin(step_interval_us, 32000);  // Cap at RMT max duration
+    // Calculate step interval in microseconds
+    step_interval_us = (uint32_t)fmax(1, (uint32_t)round(1000000.0f / (velocity_rad_s * steps_per_rad)) - 1);
+    step_interval_us = fmin(step_interval_us, 100000);  // Cap at 100ms to avoid shenanigans
 
     // Stop any existing transmission
-    if (rmt_running) {
-        stopRMT();
+    if (timer_running) {
+        stopTimer();
     }
-    
-    // Create pulse: HIGH for 1us, LOW for (interval-1) us
-    rmt_item32_t pulse = {};
-    pulse.level0 = 1;
-    pulse.duration0 = 1;  // 1us high
-    pulse.level1 = 0;
-    pulse.duration1 = fmax(1, step_interval_us - 1);  // Low for rest of interval
-    
-    esp_err_t err = rmt_write_items(rmt_channel, &pulse, 1, false);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "RMT write_items failed: %d", err);
-        return false;
-    }
+
+    timer_steps_target = steps_to_take;
+    timer_steps_taken = 0;
+
+    return true;
+};
+
+bool StepperDriver::startTimer() {
+    if (!timer_initialized || timer_running) return false;
+    esp_timer_start_periodic(this->s_step_timer, step_interval_us);
     return true;
 }
 
-bool StepperDriver::startRMT() {
-    esp_err_t err = rmt_tx_start(rmt_channel, true);
-    if (err != ESP_OK) {
-        return false;
-    }
-    rmt_start_time_us = esp_timer_get_time();
-    rmt_running = true;
+bool StepperDriver::stopTimer() {
+    if (!timer_initialized) return false;
+    esp_timer_stop(this->s_step_timer);
     return true;
-}
-
-bool StepperDriver::stopRMT(int* steps_out) {
-    esp_err_t err = rmt_tx_stop(rmt_channel);
-    if (err != ESP_OK) {
-        return false;
-    }
-    int64_t elapsed_us = esp_timer_get_time() - rmt_start_time_us;
-    int64_t steps_taken = (step_interval_us > 0) ? (elapsed_us / step_interval_us) : 0;
-    current_step_count += steps_taken * current_direction;
-
-    if (steps_out != nullptr) {
-        *steps_out = (int)steps_taken;
-    }
-
-    rmt_running = false;
-    rmt_start_time_us = 0;
-    return true;
-}
-
-void StepperDriver::detachStepFromRMT() {
-    if (!rmt_initialized) return;
-    // Disconnect step pin from RMT and reclaim as a plain GPIO output
-    gpio_reset_pin((gpio_num_t)step_pin);
-    gpio_set_direction((gpio_num_t)step_pin, GPIO_MODE_OUTPUT);
-    gpio_set_level((gpio_num_t)step_pin, 0);
-}
-
-void StepperDriver::attachStepToRMT() {
-    if (!rmt_initialized) return;
-    // Re-route step pin through the RMT TX output signal
-    gpio_set_direction((gpio_num_t)step_pin, GPIO_MODE_INPUT_OUTPUT);
-    rmt_set_gpio(rmt_channel, RMT_MODE_TX, (gpio_num_t)step_pin, false);
 }
