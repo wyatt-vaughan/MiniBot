@@ -423,11 +423,20 @@ class MainWindow(QMainWindow):
         self._board_widget.piece_selected.connect(self._path_tab.on_piece_selected)
         self._board_widget.target_set.connect(self._path_tab.on_target_set)
 
-        # Board left-click → plan + enqueue
-        self._board_widget.target_set.connect(self._path_tab.enqueue_from_board)
+        # Keep the path-planning fields synchronized.
+        self._board_widget.target_set.connect(
+            self._path_tab.on_target_set
+        )
 
-        # Board right-click → immediate dispatch
-        self._board_widget.target_queued.connect(self._on_board_target_set)
+        # Left-click target.
+        self._board_widget.target_set.connect(
+            self._on_board_left_click_target
+        )
+
+        # Right-click target.
+        self._board_widget.target_queued.connect(
+            self._on_board_right_click_target
+        )
 
         # Path planning → send (serial or sim depending on mode)
         self._path_tab.send_commands.connect(self._on_send_move_commands)
@@ -474,6 +483,7 @@ class MainWindow(QMainWindow):
         self._simulator.position_updated.connect(self._track_tab.on_position_received)
         self._simulator.move_complete.connect(self._on_sim_move_complete)
         self._simulator.log_message.connect(self._debug_tab.on_sim_log)
+        self._simulator.manual_move_detected.connect(self._on_sim_manual_move)
 
     # ------------------------------------------------------------------
     # Slots
@@ -502,6 +512,92 @@ class MainWindow(QMainWindow):
         commands  = planner.plan_moves(positions, targets)
         if commands:
             self._on_send_move_commands(commands)
+            
+    @pyqtSlot(int, float, float)
+    def _on_board_left_click_target(
+        self,
+        piece_id: int,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        """Handle a left-click destination on the on-screen board."""
+
+        if (
+            self._sim_mode
+            and self._debug_tab.mouse_move_mode_enabled
+        ):
+            self._debug_tab.on_sim_log(
+                f"[BOARD LEFT] Targeted move for "
+                f"0x{piece_id:02X}"
+            )
+
+            self._path_tab.enqueue_from_board(
+                piece_id,
+                x_mm,
+                y_mm,
+            )
+            return
+
+        # Existing side-based behavior when the mouse mode is disabled.
+        if self._is_manual_sim_piece(piece_id):
+            self._simulator.move_piece_manually(
+                piece_id,
+                x_mm,
+                y_mm,
+            )
+
+            self._board_widget.clear_selection()
+            return
+
+        self._path_tab.enqueue_from_board(
+            piece_id,
+            x_mm,
+            y_mm,
+        )
+        
+    @pyqtSlot(int, float, float)
+    def _on_board_right_click_target(
+        self,
+        piece_id: int,
+        x_mm: float,
+        y_mm: float,
+    ) -> None:
+        """Handle a right-click destination on the on-screen board."""
+
+        if (
+            self._sim_mode
+            and self._debug_tab.mouse_move_mode_enabled
+        ):
+            self._debug_tab.on_sim_log(
+                f"[BOARD RIGHT] Manual move for "
+                f"0x{piece_id:02X}"
+            )
+
+            self._simulator.move_piece_manually(
+                piece_id,
+                x_mm,
+                y_mm,
+            )
+
+            self._board_widget.clear_selection()
+            return
+
+        # Existing side-based behavior when the mouse mode is disabled.
+        if self._is_manual_sim_piece(piece_id):
+            self._simulator.move_piece_manually(
+                piece_id,
+                x_mm,
+                y_mm,
+            )
+
+            self._board_widget.clear_selection()
+            return
+
+        self._on_board_target_set(
+            piece_id,
+            x_mm,
+            y_mm,
+        )
 
     @pyqtSlot(int, float, float, int)
     def _on_looper_request_move(self, piece_id: int, x_mm: float, y_mm: float, move_time_ms: int) -> None:
@@ -532,21 +628,39 @@ class MainWindow(QMainWindow):
         """
         if not commands:
             return
+        
+        self._board.begin_movement()
 
         self._reset_wave_dispatch()
         self._pending_waves = self._group_by_sequence(commands)
         self._dispatch_next_wave()
+        
+        
 
     @pyqtSlot(bytes)
     def _on_debug_send_raw(self, data: bytes) -> None:
-        """Route a raw bytes send from the debug tab to serial or simulator."""
-        if self._sim_mode:
-            cmd = self._parse_mov_bytes(data)
-            if cmd is not None:
-                self._simulator.speed_mm_s = self._debug_tab.simulator_speed_mm_s
-                self._simulator.queue_moves([cmd])
-        else:
+        """Route a raw debug movement to serial or simulator."""
+        if not self._sim_mode:
             self._handler.send(data)
+            return
+
+        cmd = self._parse_mov_bytes(data)
+
+        if cmd is None:
+            return
+
+        if self._is_manual_sim_piece(cmd.piece_id):
+            self._simulator.move_piece_manually(
+                piece_id=cmd.piece_id,
+                x_mm=cmd.target_x_mm,
+                y_mm=cmd.target_y_mm,
+                theta_deg=cmd.target_theta,
+            )
+        else:
+            self._simulator.speed_mm_s = (
+                self._debug_tab.simulator_speed_mm_s
+            )
+            self._simulator.queue_moves([cmd])
 
     @pyqtSlot(list, dict)
     def _on_plan_visualized(self, commands: list, positions: dict) -> None:
@@ -786,6 +900,7 @@ class MainWindow(QMainWindow):
         if not self._pending_waves:
             self._wave_running = False
             self._active_wave_piece_ids.clear()
+            self._board.confirm_movement()
             return
 
         wave = self._pending_waves.pop(0)
@@ -797,13 +912,36 @@ class MainWindow(QMainWindow):
             self._dispatch_wave_serial(wave)
 
     def _dispatch_wave_sim(self, wave: List[MoveCommand]) -> None:
-        self._simulator.speed_mm_s = self._debug_tab.simulator_speed_mm_s
-        self._active_wave_piece_ids = {cmd.piece_id for cmd in wave}
-        self._simulator.queue_moves(wave)
+        """Dispatch simulator commands as manual or targeted movements."""
+        self._simulator.speed_mm_s = (
+            self._debug_tab.simulator_speed_mm_s
+        )
 
-        # Empty wave guard.
-        if not self._active_wave_piece_ids:
-            self._dispatch_next_wave()
+        targeted_commands: List[MoveCommand] = []
+
+        for cmd in wave:
+            if self._is_manual_sim_piece(cmd.piece_id):
+                self._simulator.move_piece_manually(
+                    piece_id=cmd.piece_id,
+                    x_mm=cmd.target_x_mm,
+                    y_mm=cmd.target_y_mm,
+                    theta_deg=cmd.target_theta,
+                )
+            else:
+                targeted_commands.append(cmd)
+
+        # Only targeted commands emit move_complete.
+        self._active_wave_piece_ids = {
+            cmd.piece_id
+            for cmd in targeted_commands
+        }
+
+        if targeted_commands:
+            self._simulator.queue_moves(targeted_commands)
+            return
+
+        # Every command in this wave was manual and completed instantly.
+        QTimer.singleShot(0, self._dispatch_next_wave)
 
     def _dispatch_wave_serial(self, wave: List[MoveCommand]) -> None:
         max_duration_ms = 0
@@ -874,6 +1012,20 @@ class MainWindow(QMainWindow):
         self._active_wave_piece_ids.discard(piece_id)
         if not self._active_wave_piece_ids:
             self._dispatch_next_wave()
+            
+    @pyqtSlot(int, float, float, float, float)
+    def _on_sim_manual_move(
+        self,
+        piece_id: int,
+        x_mm: float,
+        y_mm: float,
+        theta_deg: float,
+        battery_v: float,
+    ) -> None:
+        self._debug_tab.on_sim_log(
+            f"SIM manual move: 0x{piece_id:02X} "
+            f"to ({x_mm:.1f}, {y_mm:.1f})"
+        )
 
     @pyqtSlot()
     def _on_wave_timer_timeout(self) -> None:
@@ -882,3 +1034,27 @@ class MainWindow(QMainWindow):
         if not self._wave_running:
             return
         self._dispatch_next_wave()
+        
+        
+    def _is_manual_sim_piece(self, piece_id: int) -> bool:
+        piece = self._board.get_piece(piece_id)
+
+        if piece is None:
+            self._debug_tab.on_sim_log(
+                f"[ROUTE] Unknown piece 0x{piece_id:02X}"
+            )
+            return False
+
+        if piece.color == "white":
+            manual = self._debug_tab.white_side_manual
+        elif piece.color == "black":
+            manual = self._debug_tab.black_side_manual
+        else:
+            manual = False
+
+        self._debug_tab.on_sim_log(
+            f"[ROUTE] 0x{piece_id:02X} "
+            f"color={piece.color} manual={manual}"
+        )
+
+        return manual

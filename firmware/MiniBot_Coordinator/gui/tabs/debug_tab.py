@@ -169,6 +169,45 @@ class DebugTab(QWidget):
         self._btn_clear_moves.setEnabled(False)
         self._btn_clear_moves.clicked.connect(self.clear_pending_moves)
         sl.addWidget(self._btn_clear_moves)
+        
+        manual_row = QHBoxLayout()
+
+        self._white_manual_check = QCheckBox("White side manual")
+        self._white_manual_check.setChecked(False)
+        self._white_manual_check.setEnabled(False)
+        self._white_manual_check.setToolTip(
+            "White pieces instantly relocate as simulated human moves "
+            "instead of driving toward a target."
+        )
+
+        self._black_manual_check = QCheckBox("Black side manual")
+        self._black_manual_check.setChecked(False)
+        self._black_manual_check.setEnabled(False)
+        self._black_manual_check.setToolTip(
+            "Black pieces instantly relocate as simulated human moves "
+            "instead of driving toward a target."
+        )
+        
+        self._mouse_move_mode_check = QCheckBox(
+            "Left-click target / Right-click manual"
+        )
+        self._mouse_move_mode_check.setChecked(False)
+        self._mouse_move_mode_check.setEnabled(False)
+        self._mouse_move_mode_check.setToolTip(
+            "When enabled, left-click performs a normal targeted move "
+            "and right-click performs an instant manual move."
+        )
+
+        manual_row.addWidget(self._white_manual_check)
+        manual_row.addWidget(self._black_manual_check)
+        manual_row.addWidget(self._mouse_move_mode_check)
+        manual_row.addStretch()
+        
+        
+
+        sl.addWidget(self._mouse_move_mode_check)
+
+        sl.addLayout(manual_row)
 
         root.addWidget(sim_group)
 
@@ -253,11 +292,17 @@ class DebugTab(QWidget):
             self._log.append(error)
 
     def _on_sim_toggled(self, enabled: bool) -> None:
-        mode_str = 'ON' if enabled else 'OFF'
-        self._log.append(f'[SIM] Simulator mode {mode_str}')
+        mode_str = "ON" if enabled else "OFF"
+        self._log.append(f"[SIM] Simulator mode {mode_str}")
+
         self._btn_randomize.setEnabled(enabled)
         self._collision_check.setEnabled(enabled)
         self._btn_clear_moves.setEnabled(enabled)
+
+        self._white_manual_check.setEnabled(enabled)
+        self._black_manual_check.setEnabled(enabled)
+        self._mouse_move_mode_check.setEnabled(enabled)
+
         self.simulator_mode_changed.emit(enabled)
 
     # ------------------------------------------------------------------
@@ -280,6 +325,19 @@ class DebugTab(QWidget):
     @property
     def simulator_speed_mm_s(self) -> float:
         return self._sim_speed.value()
+    
+    @property
+    def white_side_manual(self) -> bool:
+        return self._white_manual_check.isChecked()
+
+
+    @property
+    def black_side_manual(self) -> bool:
+        return self._black_manual_check.isChecked()
+    
+    @property
+    def mouse_move_mode_enabled(self) -> bool:
+        return self._mouse_move_mode_check.isChecked()
 
 
     def validate_fen(self, fen: str) -> Tuple[bool, str]:
