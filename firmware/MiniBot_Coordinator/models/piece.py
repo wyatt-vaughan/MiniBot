@@ -16,6 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
+from enum import Enum, auto
+
 from config import BOARD, PIECES, CHESS
 from firmware.MiniBot_Coordinator.engines.base_engine import BaseChessEngine
 
@@ -78,6 +80,14 @@ class Piece:
         self.orientation_deg = theta_deg
         self.battery_v       = battery_v
         self.last_updated    = time.time()
+        
+
+
+
+
+class BoardPhase(Enum):
+    CONFIRMED = auto()
+    MOVING = auto()
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +105,7 @@ class BoardState:
 
     def __init__(self) -> None:
         self._pieces: Dict[int, Piece] = {}
+        self._phase = BoardPhase.CONFIRMED
         self._rules_engine: Optional[BaseChessEngine] = None
         self._build_pieces()
 
@@ -129,6 +140,20 @@ class BoardState:
                 is_staged      = pos[0] < 0,
             )
             self._pieces[pid] = piece
+            
+    def begin_movement(self) -> None:
+        
+        if self._phase == BoardPhase.MOVING:
+            raise RuntimeError("Board is already moving.")
+
+        self._phase = BoardPhase.MOVING
+        
+    def confirm_movement(self) -> None:
+        
+        if self._phase == BoardPhase.CONFIRMED:
+            raise RuntimeError("Board is already confirmed.")
+
+        self._phase = BoardPhase.CONFIRMED
 
     def set_rules_engine(
         self,
@@ -264,6 +289,7 @@ class BoardState:
         """Update a single piece's position (typically called from serial handler)."""
         piece = self._pieces.get(piece_id)
         if piece is not None:
+            print((f"Updating piece {piece_id:02X} to x={x_mm:.1f}mm, y={y_mm:.1f}mm, θ={theta_deg:.1f}°, battery={battery_v:.2f}V"))
             piece.update_position(x_mm, y_mm, theta_deg, battery_v)
 
     # ------------------------------------------------------------------
