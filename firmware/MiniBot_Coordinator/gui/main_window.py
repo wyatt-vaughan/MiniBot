@@ -36,10 +36,11 @@ from PyQt6.QtWidgets import (
 
 from comms.protocol import build_position_request, build_position_command
 from comms.serial_handler import SerialHandler
-from config import COMM, GUI, PIECES, PLANNING, SIMULATOR
+from config import COMM, GUI, PIECES, PLANNING, SIMULATOR, CHESS
 from models.piece import BoardState
 from planning.base_planner import MoveCommand
 from simulation.simulator import MotionSimulator
+from engines.base_engine import load_engine
 
 from gui.chessboard_widget import ChessBoardWidget
 from gui.tabs.path_planning_tab    import PathPlanningTab
@@ -285,6 +286,8 @@ class MainWindow(QMainWindow):
 
         # Shared state
         self._board      = BoardState()
+        self._rules_engine = load_engine(CHESS.DEFAULT_ENGINE)
+        self._board.set_rules_engine(self._rules_engine)
         self._board.reset_to_home()
         self._handler    = SerialHandler(self)
         self._simulator  = MotionSimulator(self._board, parent=self)

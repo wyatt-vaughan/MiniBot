@@ -339,7 +339,17 @@ class CHESS:
     # When a chess rules engine is integrated, set this to the engine adapter
     # callable: validate_move(fen: str, move_uci: str) -> bool
     # Leave as None to disable rules enforcement.
-    RULES_ENGINE_ADAPTER   = None
+
+    ENGINES = {
+        "Python Chess": (
+            "engines.python_chess_engine",
+            "PythonChessEngine",
+        ),
+    }
+
+    
+
+    RULES_ENGINE_ADAPTER   = "Python Chess"
 
 
 # ---------------------------------------------------------------------------

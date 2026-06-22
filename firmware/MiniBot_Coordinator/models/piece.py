@@ -16,7 +16,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
-from config import PIECES, CHESS
+from config import BOARD, PIECES, CHESS
+from firmware.MiniBot_Coordinator.engines.base_engine import BaseChessEngine
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +95,7 @@ class BoardState:
 
     def __init__(self) -> None:
         self._pieces: Dict[int, Piece] = {}
+        self._rules_engine: Optional[BaseChessEngine] = None
         self._build_pieces()
 
     # ------------------------------------------------------------------
@@ -128,6 +130,16 @@ class BoardState:
             )
             self._pieces[pid] = piece
 
+    def set_rules_engine(
+        self,
+        engine: Optional[BaseChessEngine],
+    ) -> None:
+        """Set the chess rules engine used for move validation.
+
+        Passing None disables chess-rule validation.
+        """
+        self._rules_engine = engine
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
@@ -144,6 +156,88 @@ class BoardState:
 
     def pieces_by_color(self, color: str) -> List[Piece]:
         return [p for p in self._pieces.values() if p.color == color]
+    
+    @property
+    def rules_engine(self) -> Optional[BaseChessEngine]:
+        return self._rules_engine
+        
+    def _mm_to_square(
+        x_mm: float,
+        y_mm: float,
+    ) -> Optional[str]:
+        """Convert playing-area millimeters to an algebraic square.
+
+        Examples:
+            (25, 25)   -> "a1"
+            (225, 75)  -> "e2"
+            (225, 175) -> "e4"
+
+        Returns:
+            Algebraic square name, or None when outside the playing area.
+        """
+        if not (
+            0.0 <= x_mm < BOARD.PLAYING_AREA_MM
+            and 0.0 <= y_mm < BOARD.PLAYING_AREA_MM
+        ):
+            return None
+
+        file_index = int(x_mm // BOARD.SQUARE_SIZE_MM)
+        rank_index = int(y_mm // BOARD.SQUARE_SIZE_MM)
+
+        if not (
+            0 <= file_index < BOARD.NUM_SQUARES
+            and 0 <= rank_index < BOARD.NUM_SQUARES
+        ):
+            return None
+
+        file_name = chr(ord("a") + file_index)
+        rank_name = str(rank_index + 1)
+
+        return f"{file_name}{rank_name}"
+    
+
+    @staticmethod
+    def _square_to_mm(square: str) -> Optional[tuple[float, float]]:
+        """Convert an algebraic chess square to its center position in mm.
+
+        Examples:
+            "a1" -> (25.0, 25.0)
+            "e2" -> (225.0, 75.0)
+            "e4" -> (225.0, 175.0)
+
+        Returns:
+            A tuple of (x_mm, y_mm), or None if the square is invalid.
+        """
+        square = square.strip().lower()
+
+        if len(square) != 2:
+            return None
+
+        file_name = square[0]
+        rank_name = square[1]
+
+        if file_name not in "abcdefgh":
+            return None
+
+        if rank_name not in "12345678":
+            return None
+
+        file_index = ord(file_name) - ord("a")
+        rank_index = int(rank_name) - 1
+
+        half_square = BOARD.SQUARE_SIZE_MM / 2.0
+
+        x_mm = (
+            file_index * BOARD.SQUARE_SIZE_MM
+            + half_square
+        )
+
+        y_mm = (
+            rank_index * BOARD.SQUARE_SIZE_MM
+            + half_square
+        )
+
+        return x_mm, y_mm
 
     # ------------------------------------------------------------------
     # State management
@@ -177,18 +271,120 @@ class BoardState:
     # ------------------------------------------------------------------
 
     def to_fen(self) -> str:
-        """Export the current board position as a FEN string.
+        """Export the current physical board position as a FEN string.
 
-        CHESS ENGINE INTEGRATION POINT:
-            This stub returns the starting FEN regardless of actual piece
-            positions. Replace this method body (or call super()) when
-            integrating a chess rules engine that tracks logical positions.
+        Captured, staged, and off-board pieces are excluded.
+
+        Important:
+            BoardState only knows physical piece positions. It does not currently
+            know whose turn it is, castling history, en-passant targets, or move
+            counters. Therefore, the returned FEN string will have placeholders for these fields
+            (active color = 'w', castling rights = '-', en-passant target = '-', halfmove clock = 0, fullmove number = 1).
 
         Returns:
-            A FEN string representing the current position.
+            A complete FEN string representing the current piece placement.
         """
-        # TODO: map piece positions to algebraic squares and build FEN.
-        return CHESS.STARTING_FEN
+        square_size = BOARD.SQUARE_SIZE_MM
+        board_size = BOARD.NUM_SQUARES
+
+        # board[rank][file]
+        # rank 0 = rank 1
+        # file 0 = file a
+        squares: List[List[Optional[str]]] = [
+            [None for _ in range(board_size)]
+            for _ in range(board_size)
+        ]
+
+        for piece in self._pieces.values():
+            # Captured and staged pieces are not part of the playable board.
+            if piece.is_captured or piece.is_staged:
+                continue
+
+            x_mm, y_mm = piece.position_mm
+
+            # Ignore anything physically outside the 8x8 playing area.
+            if not (
+                0.0 <= x_mm < BOARD.PLAYING_AREA_MM
+                and 0.0 <= y_mm < BOARD.PLAYING_AREA_MM
+            ):
+                continue
+
+            file_index = int(x_mm // square_size)
+            rank_index = int(y_mm // square_size)
+
+            piece_char = PIECES.RANK_CHAR.get(piece.rank)
+
+            if piece_char is None:
+                raise ValueError(
+                    f"Unknown rank '{piece.rank}' for piece "
+                    f"0x{piece.piece_id:02X}"
+                )
+
+            # FEN uses uppercase for white and lowercase for black.
+            if piece.color == "black":
+                piece_char = piece_char.lower()
+            elif piece.color != "white":
+                raise ValueError(
+                    f"Unknown color '{piece.color}' for piece "
+                    f"0x{piece.piece_id:02X}"
+                )
+
+            existing_piece = squares[rank_index][file_index]
+
+            if existing_piece is not None:
+                file_name = chr(ord("a") + file_index)
+                rank_name = rank_index + 1
+
+                raise ValueError(
+                    f"Multiple pieces detected on {file_name}{rank_name}: "
+                    f"existing '{existing_piece}', "
+                    f"piece 0x{piece.piece_id:02X} '{piece_char}'"
+                )
+
+            squares[rank_index][file_index] = piece_char
+
+        fen_ranks: List[str] = []
+
+        
+        for rank_index in range(board_size - 1, -1, -1):
+            fen_rank = ""
+            empty_count = 0
+
+            for file_index in range(board_size):
+                piece_char = squares[rank_index][file_index]
+
+                if piece_char is None:
+                    empty_count += 1
+                    continue
+
+                if empty_count > 0:
+                    fen_rank += str(empty_count)
+                    empty_count = 0
+
+                fen_rank += piece_char
+
+            if empty_count > 0:
+                fen_rank += str(empty_count)
+
+            fen_ranks.append(fen_rank)
+
+        piece_placement = "/".join(fen_ranks)
+
+        # BoardState cannot determine these from physical positions alone:
+        active_color = "w"
+        castling_rights = "-"
+        en_passant_target = "-"
+        halfmove_clock = 0
+        fullmove_number = 1
+
+        return (
+            f"{piece_placement} "
+            f"{active_color} "
+            f"{castling_rights} "
+            f"{en_passant_target} "
+            f"{halfmove_clock} "
+            f"{fullmove_number}"
+        )
 
     # ------------------------------------------------------------------
     # Chess engine integration — move validation
@@ -199,40 +395,29 @@ class BoardState:
         piece_id: int,
         target_x_mm: float,
         target_y_mm: float,
-        rules_engine: Optional[Callable[[str, str], bool]] = None,
     ) -> bool:
-        """Validate whether a move is legal according to chess rules.
+        """Validate whether a physical move is legal according to chess rules."""
 
-        CHESS ENGINE INTEGRATION POINT:
-            Currently always returns True (no rules enforcement).
-
-            To integrate a chess engine:
-            1. Convert (piece_id, target_x_mm, target_y_mm) → UCI move string.
-            2. Obtain the current FEN via self.to_fen().
-            3. Call your engine adapter: adapter(fen, uci_move) → bool.
-            4. Assign the adapter to CHESS.RULES_ENGINE_ADAPTER in config.py,
-               or pass it explicitly via the ``rules_engine`` argument.
-
-        Args:
-            piece_id:      The robot piece being moved.
-            target_x_mm:   Target X position in playing-area mm.
-            target_y_mm:   Target Y position in playing-area mm.
-            rules_engine:  Optional callable(fen, uci_move) -> bool.
-                           Falls back to CHESS.RULES_ENGINE_ADAPTER if None.
-
-        Returns:
-            True if the move is permitted (or if no engine is configured).
-        """
-        adapter = rules_engine or CHESS.RULES_ENGINE_ADAPTER
-        if adapter is None:
+        # No configured engine means rules validation is disabled.
+        if self._rules_engine is None:
             return True
 
-        fen      = self.to_fen()
-        uci_move = self._to_uci(piece_id, target_x_mm, target_y_mm)
+        uci_move = self._to_uci(
+            piece_id,
+            target_x_mm,
+            target_y_mm,
+        )
+
         if uci_move is None:
             return False
-        return adapter(fen, uci_move)
 
+        fen = self.to_fen()
+
+        return self._rules_engine.validate_move(
+            fen,
+            uci_move,
+        )
+    
     def _to_uci(
         self,
         piece_id: int,
@@ -241,8 +426,45 @@ class BoardState:
     ) -> Optional[str]:
         """Convert piece ID + target mm → UCI move string (e.g. 'e2e4').
 
-        CHESS ENGINE INTEGRATION POINT:
-            Returns None until board position → algebraic mapping is implemented.
+        Example:
+            White e-pawn, ID 0x05:
+            current position e2
+            target position e4
+            result: "e2e4"
+
+        Returns:
+            A UCI move string, or None when the movement cannot be converted.
         """
-        # TODO: implement mm → algebraic square mapping using BOARD.SQUARE_SIZE_MM
-        return None
+        piece = self.get_piece(piece_id)
+
+        if piece is None:
+            return None
+
+        if piece.is_captured or piece.is_staged:
+            return None
+
+        from_square = self._mm_to_square(
+            piece.x_mm,
+            piece.y_mm,
+        )
+
+        to_square = self._mm_to_square(
+            target_x_mm,
+            target_y_mm,
+        )
+
+        if from_square is None or to_square is None:
+            return None
+
+        if from_square == to_square:
+            return None
+
+        uci_move = f"{from_square}{to_square}"
+
+        # UCI promotion moves require a promotion character.
+        # For now, automatically promote to a queen because we have
+        # an extra staged queen for each color.
+        if piece.rank == "pawn" and to_square[1] in ("1", "8"):
+            uci_move += "q"
+
+        return uci_move
